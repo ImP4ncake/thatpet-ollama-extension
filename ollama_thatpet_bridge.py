@@ -64,6 +64,9 @@ STREAM_ERROR = 'msg="chat stream error"'
 
 # A row counts as a new message only if it was created less than RECENT seconds ago.
 RECENT = 120
+# ThatPet drops a state after 60 s without events (Brain.Config.stateTimeout), while
+# Ollama phases last minutes: repeat the current event this often during a turn.
+HEARTBEAT = 20
 # created_at formats seen: "2026-10-19 22:55:06.657+02:00" (Ollama, 1-9
 # decimals) and "2026-10-19 20:55:06" (SQLite CURRENT_TIMESTAMP, UTC).
 TIMESTAMP = re.compile(r"(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)(?:\.(\d+))?\s*(Z|[+-]\d\d:?\d\d)?")
@@ -198,7 +201,7 @@ class Pet:
                 else f"ThatPet running (pid {pid})")
             self.pid = pid
 
-    def emit(self, event, tool=None):
+    def emit(self, event, tool=None, quiet=False):
         payload = {"hook_event_name": event, "session_id": SESSION_ID}
         if tool:
             payload["tool_name"] = tool[:64]
@@ -216,7 +219,8 @@ class Pet:
             reason = p.stderr.decode("utf-8", errors="replace").strip()[:200]
             log(f"ERROR hook {event}: exit code {p.returncode}; {reason}")
             return False
-        log(f"Hook sent: {event}" + ("" if self.pid else " (ThatPet does not seem to be open)"))
+        if not quiet:
+            log(f"Hook sent: {event}" + ("" if self.pid else " (ThatPet does not seem to be open)"))
         return True
 
     def prompt(self):
@@ -374,6 +378,8 @@ def main():
     # (measured: 281 s for a 16k-token prompt), with no database writes meanwhile.
     parser.add_argument("--stall", type=float, default=900.0,
                         help="Seconds without any signal before going back to idle (default: 900)")
+    parser.add_argument("--heartbeat", type=float, default=HEARTBEAT,
+                        help=f"Seconds between repeats of the current event during a turn (default: {HEARTBEAT})")
     parser.add_argument("--selftest", action="store_true",
                         help="Send SessionStart, UserPromptSubmit and Stop to ThatPet, then exit")
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR,
@@ -381,8 +387,8 @@ def main():
     parser.add_argument("--wait-for-lock", action="store_true",
                         help="If another bridge is running, wait for it instead of exiting (used by launchd)")
     args = parser.parse_args()
-    if min(args.poll, args.idle, args.stall) <= 0:
-        parser.error("--poll, --idle and --stall must be positive")
+    if min(args.poll, args.idle, args.stall, args.heartbeat) <= 0:
+        parser.error("--poll, --idle, --stall and --heartbeat must be positive")
     if not args.pet.is_file():
         sys.exit(f"ThatPet app not found: {args.pet}")
     pet = Pet(args.pet)
@@ -438,6 +444,7 @@ def main():
                 turn["tool"] = name or "tool"
                 log(f"Tool call: {turn['tool']}")
                 pet.emit("PreToolUse", tool=turn["tool"])
+                turn["phase"], turn["last_emit"] = ("PreToolUse", turn["tool"]), time.monotonic()
         for r in rows:
             key = ("result", r[3])
             if (r[2] == "tool" and r[1] == turn["chat"] and is_fresh(r[3], turn["since"])
@@ -453,6 +460,7 @@ def main():
             pet.emit("PostToolUse")
             pet.emit("UserPromptSubmit")
             turn["tool"] = turn["tool_result_at"] = None
+            turn["phase"], turn["last_emit"] = ("UserPromptSubmit", None), time.monotonic()
 
     log("Bridge v3 started. Press Ctrl+C to stop it.")
     log("Reply end detected from " + (f"{args.log}" if applog.available else
@@ -497,7 +505,8 @@ def main():
                                                  if r[2] == "user"), fresh[-1])
                             turn = {"chat": row[1], "since": created, "started": now,
                                     "activity": now, "reply": 0, "reply_at": now,
-                                    "tool": None, "tool_result_at": None, "seen": set()}
+                                    "tool": None, "tool_result_at": None, "seen": set(),
+                                    "phase": ("UserPromptSubmit", None), "last_emit": now}
                             kind = "prompt" if row[2] == "user" else "'assistant' message (regeneration?)"
                             log(f"New {kind} in chat {row[1][:8]}")
                             pet.prompt()
@@ -540,6 +549,12 @@ def main():
                     end_turn("presumed")
                 elif now - turn["activity"] >= args.stall:
                     end_turn("stalled")
+
+            # 4) Heartbeat: keep the pet thinking/working through long phases.
+            if turn and now - turn["last_emit"] >= args.heartbeat:
+                event, tool = turn["phase"]
+                pet.emit(event, tool=tool, quiet=True)
+                turn["last_emit"] = now
 
             time.sleep(args.poll)
     except KeyboardInterrupt:

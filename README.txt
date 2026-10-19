@@ -9,6 +9,9 @@ WHAT IT DOES
   to idle if you stop a reply. It never reads or stores your chat text.
   ThatPet chooses the bubble from the tool name: web_search, web_fetch and
   browser_* tools -> "Browsing the web…".
+  ThatPet ends an animation after 60 seconds without news, while Ollama's
+  phases can last minutes, so during a reply the extension repeats the
+  current event every 20 seconds (this does not change ThatPet's turn count).
   It starts by itself at every macOS login, together with ThatPet.
 
 THE MENU BAR ICON (top right, next to ThatPet's cat)
