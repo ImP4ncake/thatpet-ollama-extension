@@ -23,18 +23,17 @@ THE MENU BAR ICON (top right, next to ThatPet's cat)
   Click it to open the menu:
     switch               turn the extension on or off (off = stays off after
                          a restart until you turn it back on)
-    ThatPet is open      whether ThatPet is running
+    ThatPet              Open / Not open
     Last reaction        the last animation sent to the pet, with the time
     orange warning       only when something is wrong, e.g. "Reply end not
-                         detected — Ollama may have changed" after an Ollama
-                         update: then check the log
+                         detected" after an Ollama update: then check the log
     Open Ollama
     Show Log             the extension's log
     Open Project Folder  this folder
     Icon Style           ThatPet | Ollama or ThatPet +
-    Quit (Cmd+Q)         stops the extension until the next login
+    Quit Extension (Cmd+Q)  stops the extension until the next login
 
-  After Quit, double-click "ThatPet Ollama Extension.app" in this folder to
+  After Quit Extension, double-click "ThatPet Ollama Extension.app" in this folder to
   bring the icon back before the next login.
 
 WHERE EVERYTHING IS
@@ -78,6 +77,11 @@ GOOD TO KNOW
     refuses to start (the autostart one waits instead), so ThatPet never gets
     events twice.
   - The log is cut back to its last 200 KB when it passes 1 MB.
-  - If replies sometimes end with an error right after a web search, that
-    comes from the model: frob/qwen3.5-instruct:9b fails after tool calls.
-    The official qwen3.5:9b, or turning web search off for that chat, avoids it.
+  - Ollama errors right after a web search ("No user query found in
+    messages") are not caused by the extension. Web results are large (20-115
+    KB of text) and Ollama's default context here is 4096 tokens, so Ollama
+    cuts the start of the chat, including your question. The model
+    frob/qwen3.5-instruct:9b then crashes (its built-in template requires the
+    question), while the official qwen3.5:9b keeps working. Fix: in Ollama's
+    Settings raise the context length (16k or more), and/or use qwen3.5:9b
+    (thinking is already off). Verified on 2026-10-20 with Ollama 0.40.6.

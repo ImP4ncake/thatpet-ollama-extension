@@ -53,19 +53,19 @@ func thatPetSavedPosition() -> Double? {
     return (CFPreferencesCopyAppValue(key as CFString, app) as? NSNumber)?.doubleValue
 }
 
-/// A problem the bridge reported in health.json, if any.
-func healthWarning() -> String? {
+/// A problem the bridge reported in health.json, if any: (what, hint).
+func healthWarning() -> (title: String, hint: String)? {
     let file = home.appendingPathComponent("Library/Application Support/OllamaThatPetBridge/health.json")
     guard let data = try? Data(contentsOf: file),
           let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     if health["read_problem"] is String {
-        return "Can't read Ollama's data — see the log"
+        return ("Can't read Ollama", "see the log")
     }
     if (health["stalled_turns"] as? Int ?? 0) > 0 {
-        return "Reply end not detected — Ollama may have changed"
+        return ("Reply end not detected", "Ollama changed?")
     }
     if health["end_detection"] as? String == "timeout" {
-        return "Ollama's app.log not found — using a timeout"
+        return ("app.log not found", "using a timeout")
     }
     return nil
 }
@@ -148,8 +148,43 @@ func extensionIcon(_ style: IconStyle = .current) -> NSImage {
     return image
 }
 
-/// Top of the menu: icon, name, status with a colored dot, and an on/off switch.
+/// Width of the menu's custom rows.
+let menuWidth: CGFloat = 320
+
+/// "● text" with a small colored dot.
+func dotted(_ text: String, dot: NSColor?, size: CGFloat) -> NSAttributedString {
+    let line = NSMutableAttributedString()
+    if let dot = dot {
+        line.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: dot,
+                                                                   .font: NSFont.systemFont(ofSize: size - 3)]))
+    }
+    line.append(NSAttributedString(string: text, attributes: [.foregroundColor: NSColor.secondaryLabelColor,
+                                                               .font: NSFont.systemFont(ofSize: size)]))
+    return line
+}
+
+/// Soft rounded tile behind the icon, like the modules in Control Center.
+final class TileView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.cornerRadius = 9
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+        }
+    }
+}
+
+/// Top of the menu: icon on a tile, name, status with a colored dot, and an on/off switch.
 final class HeaderView: NSView {
+    let tile = TileView()
     let icon = NSImageView(image: extensionIcon())
     let title = NSTextField(labelWithString: appName)
     let status = NSTextField(labelWithString: "")
@@ -157,29 +192,33 @@ final class HeaderView: NSView {
     lazy var iconWidth = icon.widthAnchor.constraint(equalToConstant: icon.image?.size.width ?? 24)
 
     init(target: AnyObject, action: Selector) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 54))
+        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 60))
         autoresizingMask = [.width]
         icon.contentTintColor = .labelColor
-        title.font = .boldSystemFont(ofSize: 13)
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
         status.font = .systemFont(ofSize: 11)
         toggle.target = target
         toggle.action = action
-        for view in [icon, title, status, toggle] as [NSView] {
+        for view in [tile, icon, title, status, toggle] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            tile.centerYAnchor.constraint(equalTo: centerYAnchor),
+            tile.heightAnchor.constraint(equalToConstant: 34),
+            tile.widthAnchor.constraint(equalTo: icon.widthAnchor, constant: 16),
+            icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+            icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
             iconWidth,
             icon.heightAnchor.constraint(equalToConstant: 18),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            title.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: 11),
+            title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             status.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            status.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            status.topAnchor.constraint(equalTo: centerYAnchor, constant: 3),
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -12),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
         ])
     }
 
@@ -191,15 +230,48 @@ final class HeaderView: NSView {
         toggle.state = running ? .on : .off
         toggle.isEnabled = busy == nil
         icon.alphaValue = running ? 1 : 0.4
-        let dot = NSAttributedString(string: "● ", attributes: [
-            .foregroundColor: busy != nil ? NSColor.systemOrange : running ? NSColor.systemGreen : NSColor.tertiaryLabelColor,
-            .font: NSFont.systemFont(ofSize: 9)])
-        let text = NSAttributedString(
-            string: busy ?? (running ? "On — ThatPet reacts to Ollama" : "Off — ThatPet ignores Ollama"),
-            attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.systemFont(ofSize: 11)])
-        let line = NSMutableAttributedString(attributedString: dot)
-        line.append(text)
-        status.attributedStringValue = line
+        status.attributedStringValue = dotted(
+            busy ?? (running ? "On · ThatPet reacts to Ollama" : "Off · ThatPet ignores Ollama"),
+            dot: busy != nil ? .systemOrange : running ? .systemGreen : .tertiaryLabelColor, size: 11)
+    }
+}
+
+/// A status line in the menu: symbol and label on the left, value on the right.
+final class InfoRow: NSView {
+    let symbolView = NSImageView()
+    let label = NSTextField(labelWithString: "")
+    let value = NSTextField(labelWithString: "")
+
+    init(symbol name: String, label text: String, tint: NSColor = .secondaryLabelColor) {
+        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 24))
+        autoresizingMask = [.width]
+        symbolView.image = symbol(name, size: 12, weight: .medium)
+        symbolView.contentTintColor = tint
+        label.stringValue = text
+        label.font = .menuFont(ofSize: 13)
+        value.alignment = .right
+        value.lineBreakMode = .byTruncatingTail
+        for view in [symbolView, label, value] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            symbolView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 15),
+            symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbolView.widthAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 7),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            value.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func set(_ text: String, dot: NSColor? = nil) {
+        value.attributedStringValue = dotted(text, dot: dot, size: 13)
     }
 }
 
@@ -210,9 +282,10 @@ final class Controller: NSObject, NSMenuDelegate {
     var running = false
     let menu = NSMenu()
     lazy var header = HeaderView(target: self, action: #selector(switchToggled(_:)))
-    let petItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let reactionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    let warningItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let petRow = InfoRow(symbol: "pawprint.fill", label: "ThatPet")
+    let reactionRow = InfoRow(symbol: "clock", label: "Last reaction")
+    let warningRow = InfoRow(symbol: "exclamationmark.triangle.fill", label: "", tint: .systemOrange)
+    let warningItem = NSMenuItem()
     let styleMenu = NSMenu()
 
     override init() {
@@ -222,13 +295,12 @@ final class Controller: NSObject, NSMenuDelegate {
         headerItem.view = header
         menu.addItem(headerItem)
         menu.addItem(.separator())
-        petItem.image = symbol("pawprint", size: 13, weight: .regular)
-        reactionItem.image = symbol("clock", size: 13, weight: .regular)
-        menu.addItem(petItem)
-        menu.addItem(reactionItem)
-        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-                .applying(NSImage.SymbolConfiguration(paletteColors: [.systemOrange])))
+        for row in [petRow, reactionRow] {
+            let item = NSMenuItem()
+            item.view = row
+            menu.addItem(item)
+        }
+        warningItem.view = warningRow
         warningItem.isHidden = true
         menu.addItem(warningItem)
         menu.addItem(.separator())
@@ -241,6 +313,7 @@ final class Controller: NSObject, NSMenuDelegate {
             let item = NSMenuItem(title: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = style.rawValue
+            item.image = extensionIcon(style)  // preview of the style
             styleMenu.addItem(item)
         }
         let styleItem = NSMenuItem(title: "Icon Style", action: nil, keyEquivalent: "")
@@ -248,10 +321,7 @@ final class Controller: NSObject, NSMenuDelegate {
         styleItem.submenu = styleMenu
         menu.addItem(styleItem)
         menu.addItem(.separator())
-        let quitItem = addItem("Quit", "power", #selector(quit), key: "q")
-        if #available(macOS 14.4, *) {
-            quitItem.subtitle = "Stops the extension until the next login"
-        }
+        addItem("Quit Extension", "power", #selector(quit), key: "q")
         createItemAfterThatPet(giveUpAt: Date().addingTimeInterval(90))
         Timer.scheduledTimer(timeInterval: 10, target: self, selector: #selector(refresh),
                              userInfo: nil, repeats: true)
@@ -320,17 +390,15 @@ final class Controller: NSObject, NSMenuDelegate {
         running = bridgeRunning()
         header.show(running: running)
         let warning = running ? healthWarning() : nil
-        warningItem.title = warning ?? ""
+        warningRow.label.stringValue = warning?.title ?? ""
+        warningRow.set(warning?.hint ?? "")
         warningItem.isHidden = warning == nil
         for item in styleMenu.items {
             item.state = item.representedObject as? String == IconStyle.current.rawValue ? .on : .off
         }
-        petItem.title = thatPet() != nil ? "ThatPet is open" : "ThatPet is not open"
-        if let last = lastReaction() {
-            reactionItem.title = "Last reaction: \(last.name) at \(last.time)"
-        } else {
-            reactionItem.title = "No reactions yet"
-        }
+        let petOpen = thatPet() != nil
+        petRow.set(petOpen ? "Open" : "Not open", dot: petOpen ? .systemGreen : .tertiaryLabelColor)
+        reactionRow.set(lastReaction().map { "\($0.name) · \($0.time)" } ?? "None yet")
         guard let button = statusItem?.button else { return }
         button.image = extensionIcon()
         button.appearsDisabled = !running
