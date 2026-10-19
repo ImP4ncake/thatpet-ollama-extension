@@ -368,8 +368,10 @@ def main():
                         help="Check interval in seconds (default: 0.5)")
     parser.add_argument("--idle", type=float, default=6.0,
                         help="Only without app.log: seconds without new text before Stop (default: 6)")
-    parser.add_argument("--stall", type=float, default=300.0,
-                        help="Seconds without any signal before going back to idle (default: 300)")
+    # Reading a big web search result can take several minutes on a MacBook Air
+    # (measured: 281 s for a 16k-token prompt), with no database writes meanwhile.
+    parser.add_argument("--stall", type=float, default=900.0,
+                        help="Seconds without any signal before going back to idle (default: 900)")
     parser.add_argument("--selftest", action="store_true",
                         help="Send SessionStart, UserPromptSubmit and Stop to ThatPet, then exit")
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR,

@@ -79,9 +79,16 @@ GOOD TO KNOW
   - The log is cut back to its last 200 KB when it passes 1 MB.
   - Ollama errors right after a web search ("No user query found in
     messages") are not caused by the extension. Web results are large (20-115
-    KB of text) and Ollama's default context here is 4096 tokens, so Ollama
-    cuts the start of the chat, including your question. The model
+    KB of text, about 1 token every 2.5-3 characters) and when they don't fit
+    in the context Ollama cuts the start of the chat, including your question.
     frob/qwen3.5-instruct:9b then crashes (its built-in template requires the
-    question), while the official qwen3.5:9b keeps working. Fix: in Ollama's
-    Settings raise the context length (16k or more), and/or use qwen3.5:9b
-    (thinking is already off). Verified on 2026-10-20 with Ollama 0.40.6.
+    question); qwen3.5:9b keeps working but on a 16 GB Mac it is 3-4x slower
+    (MLX, 8.9 GB in memory). What works best here (tested 2026-10-20, Ollama
+    0.40.6):
+      * context length 32k in Ollama's Settings (about 1 GB of memory)
+      * a new chat for searches: every message re-sends the whole chat,
+        including old search results
+      * keep frob for speed; switch to qwen3.5:9b only if a huge result
+        still makes it fail
+  - The pet goes back to idle after 15 minutes without any signal from
+    Ollama (reading big search results can take minutes).
