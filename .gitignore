@@ -1,0 +1,4 @@
+# Built by ./build_menu_app.sh
+ThatPet Ollama Extension.app/
+__pycache__/
+.DS_Store
