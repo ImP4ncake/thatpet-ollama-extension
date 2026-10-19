@@ -11,8 +11,11 @@ How it works:
   `chat stream error` line comes right before it, the turn was stopped by the
   user (`context canceled`) or failed.
 - TOOLS: when the model calls a tool (e.g. web_search) Ollama saves a row in
-  `tool_calls`, then a `tool` message with the result: the pet works at the
-  laptop in between, then goes back to thinking.
+  `tool_calls`, then a `tool` message with the result. The pet works from the
+  call until the model starts writing again, so it also covers the minutes
+  spent reading the result. ThatPet picks the bubble from the tool name:
+  web_search -> "Browsing the web…". Each call counts once, even when Ollama
+  rewrites the tool_calls rows.
 - Without app.log the bridge falls back to the v2 inactivity timeout.
 
 Events sent to ThatPet's helper (same mapping as the Hermes plugin that ships
@@ -288,18 +291,17 @@ class OllamaDB:
             "JOIN messages m ON m.id = tc.message_id WHERE tc.id > ? ORDER BY tc.id",
             (last_id,))
 
-    def reply_size(self, chat_id, since):
-        """Length of the chat's latest reply, if it was created after `since`."""
+    def latest_reply(self, chat_id):
+        """(created_at in epoch seconds, text length) of the chat's latest assistant message."""
         row = self.query(
             "SELECT created_at, length(coalesce(content,'')) + length(coalesce(thinking,'')) "
             "FROM messages WHERE role = 'assistant' AND chat_id = ? "
             "ORDER BY id DESC LIMIT 1",
             (chat_id,),
         )
-        if not row:
-            return 0
-        created = parse_time(row[0][0])
-        return row[0][1] if created is not None and created >= since - 1 else 0
+        if not row or parse_time(row[0][0]) is None:
+            return None
+        return parse_time(row[0][0]), row[0][1]
 
 
 class LogFollower:
@@ -424,19 +426,33 @@ def main():
         elif outcome in ("completed", "canceled", "failed"):
             health.update(stalled_turns=0)
 
-    def follow_tools(rows, calls):
-        """The pet works at the laptop while a tool runs, then thinks again."""
+    def follow_tools(rows, calls, latest):
+        """The pet works ("Browsing the web…" for web tools) from the tool call until the
+        model starts writing again, then thinks."""
         for _, name, chat, created in calls:
-            if chat == turn["chat"] and is_fresh(created, turn["since"]) and not turn["tool"]:
+            key = ("call", created, name)  # Ollama rewrites tool_calls with new ids
+            if chat != turn["chat"] or not is_fresh(created, turn["since"]) or key in turn["seen"]:
+                continue
+            turn["seen"].add(key)
+            if not turn["tool"]:
                 turn["tool"] = name or "tool"
                 log(f"Tool call: {turn['tool']}")
                 pet.emit("PreToolUse", tool=turn["tool"])
-        if turn["tool"] and any(r[2] == "tool" and r[1] == turn["chat"] and is_fresh(r[3], turn["since"])
-                                for r in rows):
-            log(f"Tool finished: {turn['tool']}")
-            turn["tool"] = None
+        for r in rows:
+            key = ("result", r[3])
+            if (r[2] == "tool" and r[1] == turn["chat"] and is_fresh(r[3], turn["since"])
+                    and key not in turn["seen"]):
+                turn["seen"].add(key)
+                if turn["tool"]:
+                    turn["tool_result_at"] = parse_time(r[3])
+                    log(f"Tool finished: {turn['tool']} (the model is reading the result)")
+        # A reply created after the result, with text in it: the model is writing again.
+        if (turn["tool"] and turn["tool_result_at"] and latest
+                and latest[0] > turn["tool_result_at"] and latest[1] > 0):
+            log("Model is writing the answer")
             pet.emit("PostToolUse")
-            pet.emit("UserPromptSubmit")  # the model reads the result: thinking again
+            pet.emit("UserPromptSubmit")
+            turn["tool"] = turn["tool_result_at"] = None
 
     log("Bridge v3 started. Press Ctrl+C to stop it.")
     log("Reply end detected from " + (f"{args.log}" if applog.available else
@@ -480,13 +496,15 @@ def main():
                             row, created = next(((r, ts) for r, ts in reversed(fresh)
                                                  if r[2] == "user"), fresh[-1])
                             turn = {"chat": row[1], "since": created, "started": now,
-                                    "activity": now, "reply": 0, "reply_at": now, "tool": None}
+                                    "activity": now, "reply": 0, "reply_at": now,
+                                    "tool": None, "tool_result_at": None, "seen": set()}
                             kind = "prompt" if row[2] == "user" else "'assistant' message (regeneration?)"
                             log(f"New {kind} in chat {row[1][:8]}")
                             pet.prompt()
                     if turn:
-                        follow_tools(rows, calls)
-                        size = db.reply_size(turn["chat"], turn["since"])
+                        latest = db.latest_reply(turn["chat"])
+                        follow_tools(rows, calls, latest)
+                        size = latest[1] if latest and latest[0] >= turn["since"] - 1 else 0
                         if size and size != turn["reply"]:
                             if not turn["reply"]:
                                 log(f"Model is generating (first text after {now - turn['started']:.1f} s)")

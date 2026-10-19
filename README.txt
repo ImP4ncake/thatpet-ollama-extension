@@ -3,9 +3,12 @@ ThatPet Ollama Extension
 
 WHAT IT DOES
   Makes ThatPet react to Ollama Desktop replies: Thinking while the model
-  writes, working at the laptop while it uses a tool (e.g. web search), Done
-  when it finishes, the error animation if Ollama fails, and back to idle if
-  you stop a reply. It never reads or stores your chat text.
+  writes; working with the "Browsing the web…" bubble from a web search until
+  the model starts writing the answer (it covers the minutes spent reading the
+  results); Done when it finishes; the error animation if Ollama fails; back
+  to idle if you stop a reply. It never reads or stores your chat text.
+  ThatPet chooses the bubble from the tool name: web_search, web_fetch and
+  browser_* tools -> "Browsing the web…".
   It starts by itself at every macOS login, together with ThatPet.
 
 THE MENU BAR ICON (top right, next to ThatPet's cat)
