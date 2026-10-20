@@ -34,6 +34,8 @@ THE MENU BAR ICON (top right, next to ThatPet's cat)
                          it has been going, e.g. "2:31 (6:02 total)"
     ThatPet              Open / Not open
     Last reaction        the last animation sent to the pet, with the time
+    Updated: ...         after ThatPet or Ollama update (shown for two days):
+                         all good / waiting for a reply / needs attention
     orange warning       only when something is wrong, e.g. "Reply end not
                          detected" after an Ollama update: then check the log
     Open Ollama
@@ -88,6 +90,18 @@ VERSIONS
     git checkout <version> -- <file>     bring back an old version of a file
   After changing the bridge or the icon: ./build_menu_app.sh (icon only),
   then python3 autostart.py install.
+
+AFTER UPDATES
+  The extension depends on how ThatPet and Ollama work inside, which can
+  change with an update. Every minute (and at login) it compares their
+  versions with the last ones seen (versions.json next to the installed
+  bridge) and, after an update, checks itself:
+    ThatPet  the helper answers, the link is still there (if the update
+             dropped it, it is restored with ThatPet's own command)
+    Ollama   the database still has the columns it reads and app.log is
+             there; the next reply then confirms that its end is detected
+  The result goes to the menu ("Updated: ThatPet 0.5.0 · all good") and to a
+  notification; problems also show as an orange warning and in the log.
 
 GOOD TO KNOW
   - Since ThatPet 0.4 "a disconnected agent never moves her": ThatPet ignores

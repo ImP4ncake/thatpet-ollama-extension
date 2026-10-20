@@ -35,6 +35,7 @@ import argparse
 import fcntl
 import json
 import os
+import plistlib
 import re
 import signal
 import sqlite3
@@ -49,6 +50,8 @@ HOME = Path.home()
 DEFAULT_DB = HOME / "Library/Application Support/Ollama/db.sqlite"
 DEFAULT_LOG = HOME / ".ollama/logs/app.log"
 DEFAULT_PET = Path("/Applications/ThatPet.app/Contents/MacOS/ThatPet")
+DEFAULT_THATPET_APP = Path("/Applications/ThatPet.app")
+DEFAULT_OLLAMA_APP = Path("/Applications/Ollama.app")
 PET_PID_FILE = HOME / "Library/Application Support/ThatPet/run/pet.pid"
 # Lock file and health.json live next to the installed copy.
 DEFAULT_STATE_DIR = HOME / "Library/Application Support/OllamaThatPetBridge"
@@ -100,6 +103,16 @@ def parse_time(text):
         sign = 1 if zone[0] == "+" else -1
         offset = sign * timedelta(hours=int(zone[1:3]), minutes=int(zone[-2:]))
     return (moment - offset - datetime(1970, 1, 1)).total_seconds()
+
+
+def app_version(app):
+    """CFBundleShortVersionString of an installed app, or None."""
+    try:
+        with open(app / "Contents/Info.plist", "rb") as f:
+            info = plistlib.load(f)
+        return str(info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or "") or None
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
 
 
 def tool_label(name):
@@ -304,6 +317,16 @@ class OllamaDB:
             "SELECT id, chat_id, role, created_at FROM messages WHERE id > ? ORDER BY id",
             (last_id,))
 
+    def schema_problems(self):
+        """Columns the bridge reads that are missing (after an Ollama update)."""
+        needed = {"messages": {"id", "chat_id", "role", "content", "thinking", "created_at"},
+                  "tool_calls": {"id", "message_id", "function_name"}}
+        missing = []
+        for table, columns in needed.items():
+            have = {row[1] for row in self.query(f"PRAGMA table_info({table})")}
+            missing += [f"{table}.{c}" for c in sorted(columns - have)]
+        return missing
+
     def max_tool_call_id(self):
         """Highest tool_calls id, or None if this Ollama version has no such table."""
         try:
@@ -406,6 +429,10 @@ def main():
                         help="Send SessionStart, UserPromptSubmit and Stop to ThatPet, then exit")
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR,
                         help="Folder for the lock file and health.json")
+    parser.add_argument("--thatpet-app", type=Path, default=DEFAULT_THATPET_APP, help=argparse.SUPPRESS)
+    parser.add_argument("--ollama-app", type=Path, default=DEFAULT_OLLAMA_APP, help=argparse.SUPPRESS)
+    parser.add_argument("--update-check", type=float, default=60.0,
+                        help="Seconds between checks for ThatPet/Ollama updates (default: 60)")
     parser.add_argument("--wait-for-lock", action="store_true",
                         help="If another bridge is running, wait for it instead of exiting (used by launchd)")
     args = parser.parse_args()
@@ -441,6 +468,8 @@ def main():
     stream_error = None  # (outcome, time) of the last "chat stream error" line
     previous_problem = None
     next_trim = time.monotonic() + 600
+    versions_file = args.state_dir / "versions.json"
+    next_update_check = time.monotonic()  # also right at startup: updates made while it was off
 
     def set_phase(label):
         """Current phase for the menu ("Thinking", "Browsing the web", ...), with its start time."""
@@ -463,6 +492,73 @@ def main():
             health.update(stalled_turns=health.data.get("stalled_turns", 0) + 1)
         elif outcome in ("completed", "canceled", "failed"):
             health.update(stalled_turns=0)
+        # After an Ollama update, the first reply tells whether its end is still detected.
+        check = health.data.get("update_check")
+        if check and check.get("waiting_reply") and outcome in ("completed", "canceled", "failed", "stalled"):
+            missed = outcome == "stalled" and applog.available
+            health.update(update_check=dict(check, waiting_reply=False,
+                                            problems=check["problems"] + (["Reply end not detected"] if missed else [])))
+            log("Update check: " + ("reply end NOT detected" if missed else "reply end detected, all good"))
+
+    def check_updates():
+        """Compare ThatPet's and Ollama's versions with the last ones seen; after an update,
+        check that the extension still works with them."""
+        current = {"ThatPet": app_version(args.thatpet_app), "Ollama": app_version(args.ollama_app)}
+        try:
+            seen = json.loads(versions_file.read_text())
+        except (OSError, ValueError):
+            seen = None
+        if seen == current:
+            return
+        try:
+            versions_file.write_text(json.dumps(current))
+        except OSError:
+            pass
+        if seen is None:
+            return  # first run: only remember the versions
+        changed = [(app, seen.get(app), new) for app, new in current.items() if seen.get(app) != new]
+        problems, notes, waiting = [], [], False
+        for app, old, new in changed:
+            log(f"{app} updated: {old} -> {new}; checking the extension")
+            if new is None:
+                problems.append(f"{app} not found")
+        if any(app == "ThatPet" and new for app, _, new in changed):
+            link = pet.link_status()
+            if link is None:
+                problems.append("ThatPet's helper does not answer")
+            else:
+                if link in ("notInstalled", "disconnected"):
+                    # The update dropped the link made at install: restore it ThatPet's own way.
+                    try:
+                        subprocess.run([str(args.pet), "connect", "hermes"], capture_output=True,
+                                       stdin=subprocess.DEVNULL, timeout=30)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                    link = pet.link_status()
+                    if link in (None, "notInstalled", "disconnected"):
+                        problems.append("ThatPet ignores the extension")
+                    else:
+                        notes.append("link to ThatPet restored")
+                if not turn and not pet.emit("SessionStart", quiet=True):
+                    problems.append("ThatPet's helper rejected an event")
+        if any(app == "Ollama" and new for app, _, new in changed):
+            missing = db.schema_problems()
+            if any(m.startswith("messages.") for m in missing):
+                problems.append("Ollama's database changed")
+            elif missing:
+                notes.append("tool animations unavailable")
+            if not applog.available:
+                problems.append("Ollama's app.log is missing")
+            waiting = not problems  # confirmed when the next reply ends
+        for problem in problems:
+            log(f"WARNING after the update: {problem}")
+        for note in notes:
+            log(f"After the update: {note}")
+        log("Update check: " + ("problems found" if problems else
+                                "waiting for the next Ollama reply" if waiting else "all good"))
+        health.update(update_check={
+            "at": time.time(), "apps": ", ".join(f"{a} {new}" for a, _, new in changed if new),
+            "problems": problems, "notes": notes, "waiting_reply": waiting})
 
     def follow_tools(rows, calls, latest):
         """The pet works ("Browsing the web…" for web tools) from the tool call until the
@@ -518,6 +614,12 @@ def main():
             if now >= next_trim:
                 trim_log()
                 next_trim = now + 600
+            if now >= next_update_check:
+                next_update_check = now + args.update_check
+                try:
+                    check_updates()
+                except (sqlite3.Error, OSError) as error:
+                    log(f"Update check failed: {error}")
 
             try:
                 # 1) Database: a freshly created message with no active turn = turn start.

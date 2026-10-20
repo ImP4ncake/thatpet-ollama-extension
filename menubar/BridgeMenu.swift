@@ -401,6 +401,9 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     var linked = true
     var liveTimer: Timer?
     var lastSeenEnd: Double = 0  // end time of the last reply already handled
+    var lastUpdateState = ""     // update check already notified
+    let updateRow = InfoRow(symbol: "arrow.triangle.2.circlepath", label: "")
+    let updateItem = NSMenuItem()
     // macOS refuses system notifications to apps without a developer certificate (this one is
     // signed ad hoc); then AppleScript notifications are used, which macOS shows as Script Editor.
     var systemNotificationsAllowed = false
@@ -431,6 +434,9 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
             item.view = row
             menu.addItem(item)
         }
+        updateItem.view = updateRow
+        updateItem.isHidden = true
+        menu.addItem(updateItem)
         warningItem.view = warningRow
         warningItem.isHidden = true
         menu.addItem(warningItem)
@@ -520,7 +526,9 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
 
     /// If you move ThatPet with Cmd+drag (or reopen it), the icon follows.
     @objc func followThatPet() {
-        notifyIfReplyFinished(readHealth())
+        let health = readHealth()
+        notifyIfReplyFinished(health)
+        notifyIfUpdateChecked(health)
         guard statusItem != nil, let pet = thatPet() else { return }
         let position = thatPetSavedPosition()
         if let position = position, position != placedAt {
@@ -536,13 +544,16 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         running = bridgeRunning()
         header.show(running: running)
         let health = readHealth()
+        let updateProblem = ((health?["update_check"] as? [String: Any])?["problems"] as? [String])?.first
         let warning = running && !linked ? ("ThatPet ignores the extension", "not linked")
-                                         : running ? healthWarning(health) : nil
+                    : running && updateProblem != nil ? (updateProblem ?? "", "after the update")
+                    : running ? healthWarning(health) : nil
         reconnectItem.isHidden = linked
         warningRow.label.stringValue = warning?.title ?? ""
         warningRow.set(warning?.hint ?? "")
         warningItem.isHidden = warning == nil
         showPhase(health)
+        showUpdate(health)
         notifyItem.state = notifyEnabled ? .on : .off
         for item in styleMenu.items {
             item.state = item.representedObject as? String == IconStyle.current.rawValue ? .on : .off
@@ -602,18 +613,56 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         guard notifyEnabled, seconds >= 30, outcome == "completed" || outcome == "failed",
               Date().timeIntervalSince1970 - ended < 60,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier != ollamaID else { return }
-        let title = outcome == "completed" ? "Ollama replied" : "Ollama stopped with an error"
-        let body = (outcome == "completed" ? "Ready after " : "After ") + clock(seconds)
+        post(outcome == "completed" ? "Ollama replied" : "Ollama stopped with an error",
+             (outcome == "completed" ? "Ready after " : "After ") + clock(seconds), opensOllama: true)
+    }
+
+    /// "Updated: ThatPet 0.5.0 · ● all good" for two days after an update, or while it has problems.
+    func showUpdate(_ health: [String: Any]?) {
+        guard let check = health?["update_check"] as? [String: Any], let at = check["at"] as? Double else {
+            updateItem.isHidden = true
+            return
+        }
+        let problems = check["problems"] as? [String] ?? []
+        let waiting = check["waiting_reply"] as? Bool ?? false
+        updateItem.isHidden = problems.isEmpty && !waiting && Date().timeIntervalSince1970 - at > 2 * 86_400
+        updateRow.label.stringValue = "Updated: " + (check["apps"] as? String ?? "")
+        updateRow.set(!problems.isEmpty ? "needs attention" : waiting ? "waiting for a reply" : "all good",
+                      dot: !problems.isEmpty ? .systemOrange : waiting ? .tertiaryLabelColor : .systemGreen)
+    }
+
+    /// Notification after ThatPet or Ollama were updated: whether the extension still works.
+    func notifyIfUpdateChecked(_ health: [String: Any]?) {
+        guard let check = health?["update_check"] as? [String: Any], let at = check["at"] as? Double else { return }
+        let problems = check["problems"] as? [String] ?? []
+        let waiting = check["waiting_reply"] as? Bool ?? false
+        let state = "\(at)|\(problems.count)|\(waiting)"
+        guard state != lastUpdateState else { return }
+        let firstLook = lastUpdateState.isEmpty
+        lastUpdateState = state
+        guard !firstLook || Date().timeIntervalSince1970 - at < 120 else { return }  // not old checks at launch
+        let apps = check["apps"] as? String ?? "An app"
+        if !problems.isEmpty {
+            post("\(apps): the extension needs attention", problems.joined(separator: " · "))
+        } else if waiting {
+            post("\(apps) updated", "Checks passed · confirming at the next Ollama reply")
+        } else {
+            post("\(apps) updated", "The extension still works with it")
+        }
+    }
+
+    /// A system notification if macOS allows it, otherwise an AppleScript one (shown as Script Editor).
+    func post(_ title: String, _ body: String, opensOllama: Bool = false) {
         guard systemNotificationsAllowed else {
             // Text passed as arguments, never pasted into the script.
             run("/usr/bin/osascript", ["-e", "on run argv",
                                        "-e", "display notification (item 2 of argv) with title (item 1 of argv) sound name \"Glass\"",
-                                       "-e", "end run", title, body + " · open Ollama to read it"])
+                                       "-e", "end run", title, body + (opensOllama ? " · open Ollama to read it" : "")])
             return
         }
         let content = UNMutableNotificationContent()
         content.title = title
-        content.body = body + " · click to open Ollama"
+        content.body = body + (opensOllama ? " · click to open Ollama" : "")
         content.sound = .default
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))

@@ -199,7 +199,7 @@ def uninstall():
     removed = [p for p in (PLIST, MENU_PLIST, SCRIPT, SELF_COPY) if p.exists()]
     for path in removed:
         path.unlink()
-    for state in ("bridge.lock", "health.json", "health.json.tmp"):  # written by the bridge
+    for state in ("bridge.lock", "health.json", "health.json.tmp", "versions.json"):  # written by the bridge
         if (INSTALL_DIR / state).exists():
             (INSTALL_DIR / state).unlink()
     if THATPET.exists() and not shutil.which("hermes"):
