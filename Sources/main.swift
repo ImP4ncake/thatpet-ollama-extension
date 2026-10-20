@@ -5,6 +5,7 @@
 //   --update-now            check GitHub for a newer release and install it (no relaunch)
 //   --preview FILE.png      draw an enlarged preview of the menu bar icon
 //   --notification-check    print the notification permission and send a test notification
+//   --unregister-login-item remove this copy from Open at Login
 //   --version               print the version
 
 import AppKit
@@ -29,6 +30,12 @@ case "--preview":
 
 case "--notification-check":
     notificationCheck()
+    exit(0)
+
+case "--unregister-login-item":
+    // Removes this copy from Open at Login (used when the app's bundle id changes).
+    Setup.setOpenAtLogin(false)
+    print("Open at login: \(Setup.openAtLogin ? "still on" : "off")")
     exit(0)
 
 case "--update-now":
