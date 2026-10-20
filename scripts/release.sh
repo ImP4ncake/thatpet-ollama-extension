@@ -4,8 +4,9 @@
 #   scripts/release.sh 1.0.1 "Fix for ThatPet 0.5"
 #
 # It sets the version, builds, runs the simulation (stops on any error), zips and signs the
-# app with the key in ~/.config/thatpet-ollama-extension, commits, tags and creates the
-# GitHub release with the zip and its .sig.
+# app with the key in ~/.config/thatpet-ollama-extension, makes the installer (.dmg), commits,
+# tags and creates the GitHub release with the installer, the zip and its .sig (the zip and .sig
+# are what installed apps update from).
 set -e
 cd "$(dirname "$0")/.."
 VERSION="$1"
@@ -37,13 +38,15 @@ rm -f "$ZIP" "$ZIP.sig"
 ditto -c -k --keepParent "$APP" "$ZIP"
 swift scripts/signing.swift sign "$ZIP"
 swift scripts/signing.swift verify "$ZIP"
+scripts/make_dmg.sh
+DMG="build/ThatPet-Ollama-Extension.dmg"
 
 git add Resources/Info.plist
 git commit -q -m "Release $VERSION"
 git tag "v$VERSION"
 git push -q origin HEAD "v$VERSION"
-"$GH" release create "v$VERSION" "$ZIP" "$ZIP.sig" --title "$VERSION" \
+"$GH" release create "v$VERSION" "$DMG" "$ZIP" "$ZIP.sig" --title "$VERSION" \
   --notes "${NOTES:-Version $VERSION}
 
-Download **ThatPet-Ollama-Extension-$VERSION.zip**, unzip it and drag the app to Applications. Already installed? It updates itself."
+**Install:** download **ThatPet-Ollama-Extension.dmg**, open it and drag the app into Applications. Already installed? It updates itself."
 echo "Published $VERSION"

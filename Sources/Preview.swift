@@ -76,3 +76,76 @@ func notificationCheck() {
     }
     done.wait()
 }
+
+/// Offscreen preview of the menu's top (header and status strip) in a few states, light and dark,
+/// with the native items sketched below for proportions.
+func renderMenuPreview(to path: String) {
+    final class Target: NSObject { @objc func noop(_ sender: Any?) {} }
+    let target = Target()
+    let appIcon = Bundle.main.path(forResource: "AppIcon", ofType: "icns").flatMap(NSImage.init(contentsOfFile:))
+    let states: [(Bool, String, NSColor, Bool, Bool)] = [
+        (true, "Ready", .systemGreen, false, false),
+        (true, "Browsing the web · 2:31", .controlAccentColor, true, false),
+        (false, "Off", .systemRed, false, false),
+        (true, "Turning on…", .systemOrange, false, true),
+    ]
+    let items = ["Open Ollama", "Settings", "Quit Extension"]
+    let rowHeight: CGFloat = 22
+    let panelHeight = 6 + 50 + 20 + 11 + CGFloat(items.count) * rowHeight + 11 + 6
+    let gap: CGFloat = 16
+    let size = NSSize(width: (menuWidth + gap) * 2 + gap, height: (panelHeight + gap) * CGFloat(states.count) + gap)
+    let root = NSView(frame: NSRect(origin: .zero, size: size))
+    root.wantsLayer = true
+    root.layer?.backgroundColor = NSColor(white: 0.5, alpha: 1).cgColor
+    for (column, appearance) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
+        for (row, state) in states.enumerated() {
+            let panel = NSView(frame: NSRect(x: gap + CGFloat(column) * (menuWidth + gap),
+                                             y: size.height - CGFloat(row + 1) * (panelHeight + gap),
+                                             width: menuWidth, height: panelHeight))
+            panel.appearance = NSAppearance(named: appearance)
+            panel.wantsLayer = true
+            panel.layer?.cornerRadius = 10
+            panel.layer?.backgroundColor = (appearance == .aqua ? NSColor(white: 0.95, alpha: 1)
+                                                               : NSColor(white: 0.19, alpha: 1)).cgColor
+            let header = HeaderView(target: target, action: #selector(Target.noop(_:)), icon: appIcon)
+            header.show(running: state.0, status: state.1, color: state.2, pulsing: state.3, busy: state.4)
+            let strip = StatusStrip()
+            strip.show(pet: "ThatPet", petColor: .systemGreen, reaction: "Done · 23:10")
+            var y = panelHeight - 6 - 50
+            header.setFrameOrigin(NSPoint(x: 0, y: y)); panel.addSubview(header)
+            y -= 20
+            strip.setFrameOrigin(NSPoint(x: 0, y: y)); panel.addSubview(strip)
+            let ink = appearance == .aqua ? NSColor.black : NSColor.white
+            func separator(_ at: CGFloat) {
+                let line = NSBox(frame: NSRect(x: 14, y: at, width: menuWidth - 28, height: 1))
+                line.boxType = .custom; line.borderWidth = 0
+                line.fillColor = ink.withAlphaComponent(0.1)
+                panel.addSubview(line)
+            }
+            y -= 6; separator(y); y -= 5
+            for (index, title) in items.enumerated() {
+                y -= rowHeight
+                let image = NSImageView(frame: NSRect(x: 12, y: y + 3, width: 16, height: 16))
+                image.image = symbol(["bubble.left.and.bubble.right", "gearshape", "power"][index], size: 13, weight: .regular)
+                image.contentTintColor = ink.withAlphaComponent(0.85)
+                let label = NSTextField(labelWithString: title)
+                label.font = .menuFont(ofSize: 13)
+                label.frame = NSRect(x: 34, y: y + 3, width: 160, height: 17)
+                let trailing = NSTextField(labelWithString: ["", "›", "⌘Q"][index])
+                trailing.font = .menuFont(ofSize: 13)
+                trailing.textColor = .tertiaryLabelColor
+                trailing.alignment = .right
+                trailing.frame = NSRect(x: menuWidth - 80, y: y + 3, width: 66, height: 17)
+                [image, label, trailing].forEach(panel.addSubview)
+                if index == 1 { y -= 6; separator(y); y -= 5 }
+            }
+            root.addSubview(panel)
+        }
+    }
+    let window = NSWindow(contentRect: root.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.contentView = root
+    root.layoutSubtreeIfNeeded()
+    guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return }
+    root.cacheDisplay(in: root.bounds, to: rep)
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+}

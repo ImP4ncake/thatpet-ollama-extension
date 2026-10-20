@@ -63,7 +63,7 @@ func extensionIcon(_ style: IconStyle = .current) -> NSImage {
 }
 
 /// Width of the menu's custom rows.
-let menuWidth: CGFloat = 320
+let menuWidth: CGFloat = 272
 
 /// "● text" with a small colored dot.
 func dotted(_ text: String, dot: NSColor?, size: CGFloat) -> NSAttributedString {
@@ -77,22 +77,31 @@ func dotted(_ text: String, dot: NSColor?, size: CGFloat) -> NSAttributedString 
     return line
 }
 
-/// Soft rounded tile behind the icon, like the modules in Control Center.
-final class TileView: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
+/// A small status dot that can softly pulse while Ollama is working.
+final class DotView: NSView {
+    var color: NSColor = .systemGreen { didSet { needsDisplay = true } }
+    var pulsing = false {
+        didSet {
+            guard pulsing != oldValue else { return }
+            wantsLayer = true
+            if pulsing {
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1
+                pulse.toValue = 0.25
+                pulse.duration = 0.8
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer?.add(pulse, forKey: "pulse")
+            } else {
+                layer?.removeAnimation(forKey: "pulse")
+            }
+        }
     }
 
-    required init?(coder: NSCoder) { nil }
-
-    override var wantsUpdateLayer: Bool { true }
-
-    override func updateLayer() {
-        layer?.cornerRadius = 9
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
-        }
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 0.5, dy: 0.5)).fill()
     }
 }
 
@@ -103,7 +112,7 @@ final class ColorSwitch: NSControl {
     private var animation: Timer?
 
     override var isEnabled: Bool { didSet { needsDisplay = true } }
-    override var intrinsicContentSize: NSSize { NSSize(width: 42, height: 24) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 36, height: 20) }
 
     func set(on: Bool, animated: Bool) {
         guard on != isOn || animation == nil && knob != (on ? 1 : 0) else { return }
@@ -131,16 +140,16 @@ final class ColorSwitch: NSControl {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let track = NSRect(x: 1, y: (bounds.height - 22) / 2, width: bounds.width - 2, height: 22)
+        let track = bounds.insetBy(dx: 1, dy: (bounds.height - 18) / 2)
         (!isEnabled ? NSColor.systemOrange : isOn ? NSColor.systemGreen : NSColor.systemRed).setFill()
-        NSBezierPath(roundedRect: track, xRadius: 11, yRadius: 11).fill()
-        let size: CGFloat = 18
+        NSBezierPath(roundedRect: track, xRadius: track.height / 2, yRadius: track.height / 2).fill()
+        let size = track.height - 4
         let knobRect = NSRect(x: track.minX + 2 + (track.width - 4 - size) * knob, y: track.minY + 2,
                               width: size, height: size)
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
-        shadow.shadowBlurRadius = 2
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowBlurRadius = 1.5
+        shadow.shadowOffset = NSSize(width: 0, height: -0.5)
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
         shadow.set()
         NSColor.white.setFill()
@@ -172,101 +181,144 @@ final class ColorSwitch: NSControl {
     }
 }
 
-/// Top of the menu: icon on a tile, name, status with a colored dot, and an on/off switch.
+/// Top of the menu: the app icon, the name, one status line and the on/off switch.
+/// The status line is "Ready", "Off", or what Ollama is doing ("Browsing the web · 2:31").
 final class HeaderView: NSView {
-    let tile = TileView()
-    let icon = NSImageView(image: extensionIcon())
-    let title = NSTextField(labelWithString: appName)
+    let icon = NSImageView()
+    let title = NSTextField(labelWithString: "ThatPet + Ollama")
+    let dot = DotView()
     let status = NSTextField(labelWithString: "")
     let toggle = ColorSwitch()
-    lazy var iconWidth = icon.widthAnchor.constraint(equalToConstant: icon.image?.size.width ?? 24)
 
-    init(target: AnyObject, action: Selector) {
-        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 60))
+    init(target: AnyObject, action: Selector, icon image: NSImage? = NSApp?.applicationIconImage) {
+        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 50))
         autoresizingMask = [.width]
-        icon.contentTintColor = .labelColor
+        icon.image = image
+        icon.imageScaling = .scaleProportionallyUpOrDown
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         status.font = .systemFont(ofSize: 11)
+        status.textColor = .secondaryLabelColor
+        status.lineBreakMode = .byTruncatingTail
         toggle.target = target
         toggle.action = action
-        for view in [tile, icon, title, status, toggle] as [NSView] {
+        for view in [icon, title, dot, status, toggle] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         NSLayoutConstraint.activate([
-            tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            tile.centerYAnchor.constraint(equalTo: centerYAnchor),
-            tile.heightAnchor.constraint(equalToConstant: 34),
-            tile.widthAnchor.constraint(equalTo: icon.widthAnchor, constant: 16),
-            icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
-            iconWidth,
-            icon.heightAnchor.constraint(equalToConstant: 18),
-            title.leadingAnchor.constraint(equalTo: tile.trailingAnchor, constant: 11),
-            title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            status.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            status.topAnchor.constraint(equalTo: centerYAnchor, constant: 3),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 32),
+            icon.heightAnchor.constraint(equalToConstant: 32),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 0),
+            dot.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 1),
+            dot.centerYAnchor.constraint(equalTo: status.centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
+            status.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 5),
+            status.topAnchor.constraint(equalTo: centerYAnchor, constant: 2),
+            status.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8),
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
-            toggle.widthAnchor.constraint(equalToConstant: 42),
-            toggle.heightAnchor.constraint(equalToConstant: 24),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
+            toggle.widthAnchor.constraint(equalToConstant: 36),
+            toggle.heightAnchor.constraint(equalToConstant: 20),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8),
         ])
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func show(running: Bool, busy: String? = nil) {
-        icon.image = extensionIcon()
-        iconWidth.constant = icon.image?.size.width ?? 24
+    func show(running: Bool, status text: String, color: NSColor, pulsing: Bool = false, busy: Bool = false) {
         toggle.set(on: running, animated: window != nil)
-        toggle.isEnabled = busy == nil
-        icon.alphaValue = running ? 1 : 0.4
-        status.attributedStringValue = dotted(
-            busy ?? (running ? "On · ThatPet reacts to Ollama" : "Off · ThatPet ignores Ollama"),
-            dot: busy != nil ? .systemOrange : running ? .systemGreen : .systemRed, size: 11)
+        toggle.isEnabled = !busy
+        icon.alphaValue = running || busy ? 1 : 0.45
+        dot.color = color
+        dot.pulsing = pulsing
+        status.stringValue = text
     }
 }
 
-/// A status line in the menu: symbol and label on the left, value on the right.
+/// A compact line under the header: ThatPet's state and the last reaction, icons first.
+final class StatusStrip: NSView {
+    let petIcon = NSImageView()
+    let petText = NSTextField(labelWithString: "ThatPet")
+    let clockIcon = NSImageView()
+    let reactionText = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 20))
+        autoresizingMask = [.width]
+        petIcon.image = symbol("pawprint.fill", size: 10, weight: .semibold)
+        clockIcon.image = symbol("clock", size: 10, weight: .medium)
+        clockIcon.contentTintColor = .tertiaryLabelColor
+        for text in [petText, reactionText] {
+            text.font = .systemFont(ofSize: 11)
+            text.textColor = .secondaryLabelColor
+        }
+        for view in [petIcon, petText, clockIcon, reactionText] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            petIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 53),
+            petIcon.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -2),
+            petText.leadingAnchor.constraint(equalTo: petIcon.trailingAnchor, constant: 4),
+            petText.centerYAnchor.constraint(equalTo: petIcon.centerYAnchor),
+            clockIcon.leadingAnchor.constraint(equalTo: petText.trailingAnchor, constant: 12),
+            clockIcon.centerYAnchor.constraint(equalTo: petIcon.centerYAnchor),
+            reactionText.leadingAnchor.constraint(equalTo: clockIcon.trailingAnchor, constant: 4),
+            reactionText.centerYAnchor.constraint(equalTo: petIcon.centerYAnchor),
+            reactionText.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// pet: "ThatPet", "Not linked" or "ThatPet closed"; color: green, orange or grey.
+    func show(pet: String, petColor: NSColor, reaction: String) {
+        petText.stringValue = pet
+        petIcon.contentTintColor = petColor
+        reactionText.stringValue = reaction
+        toolTip = "ThatPet: \(pet) · last reaction: \(reaction)"
+    }
+}
+
+/// A status line in the menu (used for warnings): symbol and label on the left, hint on the right.
 final class InfoRow: NSView {
     let symbolView = NSImageView()
     let label = NSTextField(labelWithString: "")
     let value = NSTextField(labelWithString: "")
 
     init(symbol name: String, label text: String, tint: NSColor = .secondaryLabelColor) {
-        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 24))
+        super.init(frame: NSRect(x: 0, y: 0, width: menuWidth, height: 22))
         autoresizingMask = [.width]
-        symbolView.image = symbol(name, size: 12, weight: .medium)
+        symbolView.image = symbol(name, size: 11, weight: .medium)
         symbolView.contentTintColor = tint
         label.stringValue = text
-        label.font = .menuFont(ofSize: 13)
+        label.font = .systemFont(ofSize: 12)
+        label.lineBreakMode = .byTruncatingTail
         value.alignment = .right
         value.lineBreakMode = .byTruncatingTail
         for view in [symbolView, label, value] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        label.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             symbolView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 15),
             symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            symbolView.widthAnchor.constraint(equalToConstant: 16),
-            label.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 7),
+            symbolView.widthAnchor.constraint(equalToConstant: 14),
+            label.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 6),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             value.centerYAnchor.constraint(equalTo: centerYAnchor),
-            value.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 12),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
         ])
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func setSymbol(_ name: String) {
-        symbolView.image = symbol(name, size: 12, weight: .medium)
-    }
-
     func set(_ text: String, dot: NSColor? = nil) {
-        value.attributedStringValue = dotted(text, dot: dot, size: 13)
+        value.attributedStringValue = dotted(text, dot: dot, size: 11)
     }
 }

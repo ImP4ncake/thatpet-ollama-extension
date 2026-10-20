@@ -4,6 +4,7 @@
 //   --bridge [options]      run only the bridge, logging to stdout (used by tests/simulate.py)
 //   --update-now            check GitHub for a newer release and install it (no relaunch)
 //   --preview FILE.png      draw an enlarged preview of the menu bar icon
+//   --menu-preview FILE.png draw the top of the menu in a few states, light and dark
 //   --notification-check    print the notification permission and send a test notification
 //   --unregister-login-item remove this copy from Open at Login
 //   --version               print the version
@@ -26,6 +27,12 @@ case "--version":
 case "--preview":
     guard let path = value(after: "--preview") else { exit(1) }
     renderPreview(to: path)
+    exit(0)
+
+case "--menu-preview":
+    guard let path = value(after: "--menu-preview") else { exit(1) }
+    _ = NSApplication.shared
+    renderMenuPreview(to: path)
     exit(0)
 
 case "--notification-check":

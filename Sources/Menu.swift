@@ -73,28 +73,21 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     var petPID: pid_t?
     let menu = NSMenu()
     lazy var header = HeaderView(target: self, action: #selector(switchToggled(_:)))
-    let nowRow = InfoRow(symbol: "ellipsis.bubble", label: "", tint: .controlAccentColor)
-    let nowItem = NSMenuItem()
-    let petRow = InfoRow(symbol: "pawprint.fill", label: "ThatPet")
-    let reactionRow = InfoRow(symbol: "clock", label: "Last reaction")
-    let checkRow = InfoRow(symbol: "arrow.triangle.2.circlepath", label: "")
-    let checkItem = NSMenuItem()
+    let strip = StatusStrip()
     let warningRow = InfoRow(symbol: "exclamationmark.triangle.fill", label: "", tint: .systemOrange)
     let warningItem = NSMenuItem()
     let reconnectItem = NSMenuItem(title: "Reconnect to ThatPet", action: #selector(reconnect), keyEquivalent: "")
     let updateItem = NSMenuItem(title: "", action: #selector(installUpdate), keyEquivalent: "")
-    let notifyItem = NSMenuItem(title: "Notify When a Reply Is Ready", action: #selector(toggleNotify), keyEquivalent: "")
+    let notifyItem = NSMenuItem(title: "Notifications", action: #selector(toggleNotify), keyEquivalent: "")
     let loginItem = NSMenuItem(title: "Open at Login", action: #selector(toggleOpenAtLogin), keyEquivalent: "")
-    let autoUpdateItem = NSMenuItem(title: "Install Updates Automatically", action: #selector(toggleAutoUpdate),
-                                    keyEquivalent: "")
-    let checkUpdatesItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+    let autoUpdateItem = NSMenuItem(title: "Automatic Updates", action: #selector(toggleAutoUpdate), keyEquivalent: "")
     let styleMenu = NSMenu()
     var liveTimer: Timer?
     var linked = true
+    var busy: String?             // "Turning on…" while the switch acts
     var lastSeenEnd: Double = 0   // end time of the last reply already handled
     var lastUpdateState = ""      // ThatPet/Ollama update check already notified
     var systemNotificationsAllowed = false
-    var manualUpdateCheck = false
 
     // The bridge, on its own thread. Off (switch) is remembered across launches.
     private var bridge: Bridge?
@@ -113,51 +106,51 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     override init() {
         super.init()
         menu.delegate = self
-        let headerItem = NSMenuItem()
-        headerItem.view = header
-        menu.addItem(headerItem)
-        menu.addItem(.separator())
-        for (item, row) in [(nowItem, nowRow), (NSMenuItem(), petRow), (NSMenuItem(), reactionRow),
-                            (checkItem, checkRow), (warningItem, warningRow)] {
-            item.view = row
+        for view in [header, strip] as [NSView] {
+            let item = NSMenuItem()
+            item.view = view
             menu.addItem(item)
         }
-        nowItem.isHidden = true
-        checkItem.isHidden = true
+        warningItem.view = warningRow
         warningItem.isHidden = true
-        for item in [reconnectItem, updateItem] {
+        menu.addItem(warningItem)
+        for (item, image) in [(reconnectItem, "link"), (updateItem, "arrow.down.circle")] {
             item.target = self
+            item.image = symbol(image, size: 13, weight: .regular)
             item.isHidden = true
             menu.addItem(item)
         }
-        reconnectItem.image = symbol("link", size: 13, weight: .regular)
-        updateItem.image = symbol("arrow.down.circle", size: 13, weight: .regular)
         menu.addItem(.separator())
         if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ollamaID) != nil {
-            addItem("Open Ollama", "bubble.left.and.bubble.right", #selector(openOllama))
+            menu.addItem(item("Open Ollama", "bubble.left.and.bubble.right", #selector(openOllama)))
         }
-        addItem("Show Log", "doc.text", #selector(showLog))
-        addItem("About & Help on GitHub", "info.circle", #selector(openProject))
-        menu.addItem(.separator())
-        for (item, image) in [(notifyItem, "bell"), (loginItem, "power.circle"), (autoUpdateItem, "arrow.clockwise"),
-                              (checkUpdatesItem, "arrow.down.app")] {
-            item.target = self
-            item.image = symbol(image, size: 13, weight: .regular)
-            menu.addItem(item)
+        let settings = NSMenu()
+        for (option, image) in [(notifyItem, "bell"), (loginItem, "power.circle"), (autoUpdateItem, "arrow.clockwise")] {
+            option.target = self
+            option.image = symbol(image, size: 13, weight: .regular)
+            settings.addItem(option)
         }
         for style in IconStyle.allCases {
-            let item = NSMenuItem(title: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = style.rawValue
-            item.image = extensionIcon(style)
-            styleMenu.addItem(item)
+            let styleItem = NSMenuItem(title: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
+            styleItem.target = self
+            styleItem.representedObject = style.rawValue
+            styleItem.image = extensionIcon(style)
+            styleMenu.addItem(styleItem)
         }
         let styleItem = NSMenuItem(title: "Icon Style", action: nil, keyEquivalent: "")
         styleItem.image = symbol("paintbrush", size: 13, weight: .regular)
         styleItem.submenu = styleMenu
-        menu.addItem(styleItem)
+        settings.addItem(styleItem)
+        settings.addItem(.separator())
+        settings.addItem(item("Check for Updates…", "arrow.down.app", #selector(checkForUpdates)))
+        settings.addItem(item("Show Log", "doc.text", #selector(showLog)))
+        settings.addItem(item("About & Help", "info.circle", #selector(openProject)))
+        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        settingsItem.image = symbol("gearshape", size: 13, weight: .regular)
+        settingsItem.submenu = settings
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
-        addItem("Quit Extension", "power", #selector(quit), key: "q")
+        menu.addItem(item("Quit Extension", "power", #selector(quit), key: "q"))
 
         lastSeenEnd = (readHealth()?["last_turn"] as? [String: Any])?["ended"] as? Double ?? 0
         UNUserNotificationCenter.current().delegate = self
@@ -173,12 +166,10 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         announceUpdateIfJustUpdated()
     }
 
-    @discardableResult
-    func addItem(_ title: String, _ image: String, _ action: Selector, key: String = "") -> NSMenuItem {
+    func item(_ title: String, _ image: String, _ action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         item.image = symbol(image, size: 13, weight: .regular)
-        menu.addItem(item)
         return item
     }
 
@@ -210,10 +201,7 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         bridge = nil
         current.stop()
         let deadline = Date().addingTimeInterval(5)
-        while FileManager.default.fileExists(atPath: stateDirectory + "/bridge.lock"),
-              lockHeld(), Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.1)
-        }
+        while lockHeld(), Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
     }
 
     private func lockHeld() -> Bool {
@@ -277,26 +265,24 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     // MARK: Menu contents
 
     @objc func refresh() {
-        header.show(running: running)
         let health = readHealth()
+        showStatus(health)
         let warning = running && !linked ? ("ThatPet ignores the extension", "not linked")
                     : running ? healthWarning(health) : nil
-        reconnectItem.isHidden = linked
         warningRow.label.stringValue = warning?.title ?? ""
         warningRow.set(warning?.hint ?? "")
         warningItem.isHidden = warning == nil
-        showPhase(health)
-        showChecks(health)
+        reconnectItem.isHidden = linked
+        let petOpen = thatPet() != nil
+        strip.show(pet: !petOpen ? "ThatPet closed" : linked ? "ThatPet" : "Not linked",
+                   petColor: !petOpen ? .tertiaryLabelColor : linked ? .systemGreen : .systemOrange,
+                   reaction: lastReaction().map { "\($0.name) · \($0.time)" } ?? "No reactions yet")
         notifyItem.state = notifyEnabled ? .on : .off
         loginItem.state = Setup.openAtLogin ? .on : .off
         autoUpdateItem.state = Updater.shared.automatic ? .on : .off
         for item in styleMenu.items {
             item.state = item.representedObject as? String == IconStyle.current.rawValue ? .on : .off
         }
-        let petOpen = thatPet() != nil
-        petRow.set(!petOpen ? "Not open" : linked ? "Open" : "Open · not linked",
-                   dot: !petOpen ? .tertiaryLabelColor : linked ? .systemGreen : .systemOrange)
-        reactionRow.set(lastReaction().map { "\($0.name) · \($0.time)" } ?? "None yet")
         switch Updater.shared.state {
         case .available(let version):
             updateItem.title = "Install Update \(version)"
@@ -313,48 +299,18 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         button.toolTip = "\(appName): " + (running ? "on" : "off")
     }
 
-    /// "Browsing the web · 2:31 (6:02 total)" while Ollama is replying; hidden otherwise.
-    func showPhase(_ health: [String: Any]?) {
-        guard running, let phase = health?["phase"] as? String, let since = health?["phase_since"] as? Double else {
-            nowItem.isHidden = true
-            return
+    /// The header's status line: "Ready", "Off", or what Ollama is doing, with a timer.
+    func showStatus(_ health: [String: Any]?) {
+        if let busy = busy {
+            header.show(running: enabled, status: busy, color: .systemOrange, busy: true)
+        } else if !running {
+            header.show(running: false, status: "Off", color: .systemRed)
+        } else if let phase = health?["phase"] as? String, let since = health?["phase_since"] as? Double {
+            header.show(running: true, status: "\(phase) · \(clock(Date().timeIntervalSince1970 - since))",
+                        color: .controlAccentColor, pulsing: true)
+        } else {
+            header.show(running: true, status: "Ready", color: .systemGreen)
         }
-        let now = Date().timeIntervalSince1970
-        var elapsed = clock(now - since)
-        if let start = health?["turn_since"] as? Double, since - start >= 2 { elapsed += " (\(clock(now - start)) total)" }
-        nowRow.label.stringValue = phase
-        nowRow.set(elapsed)
-        nowRow.setSymbol(["Thinking": "ellipsis.bubble", "Browsing the web": "globe",
-                          "Writing the answer": "text.cursor"][phase] ?? "wrench.and.screwdriver")
-        nowItem.isHidden = false
-    }
-
-    /// After a ThatPet/Ollama update (two days, or while it has problems) or a manual
-    /// update check: "Updated: ThatPet 0.5.0 · all good", "Up to date · 1.0.0", ...
-    func showChecks(_ health: [String: Any]?) {
-        if manualUpdateCheck {
-            checkRow.label.stringValue = appName
-            switch Updater.shared.state {
-            case .checking: checkRow.set("checking for updates…")
-            case .upToDate: checkRow.set("up to date · \(appVersion)", dot: .systemGreen)
-            case .available(let version): checkRow.set("update \(version) available", dot: .controlAccentColor)
-            case .installing: checkRow.set("installing the update…", dot: .controlAccentColor)
-            case .failed(let text): checkRow.set(text, dot: .systemOrange)
-            case .idle: checkRow.set("")
-            }
-            checkItem.isHidden = false
-            return
-        }
-        guard let check = health?["update_check"] as? [String: Any], let at = check["at"] as? Double else {
-            checkItem.isHidden = true
-            return
-        }
-        let problems = check["problems"] as? [String] ?? []
-        let waiting = check["waiting_reply"] as? Bool ?? false
-        checkItem.isHidden = problems.isEmpty && !waiting && Date().timeIntervalSince1970 - at > 2 * 86_400
-        checkRow.label.stringValue = "Updated: " + (check["apps"] as? String ?? "")
-        checkRow.set(!problems.isEmpty ? "needs attention" : waiting ? "waiting for a reply" : "all good",
-                     dot: !problems.isEmpty ? .systemOrange : waiting ? .tertiaryLabelColor : .systemGreen)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -368,15 +324,14 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     func menuDidClose(_ menu: NSMenu) {
         liveTimer?.invalidate()
         liveTimer = nil
-        manualUpdateCheck = false
     }
 
-    @objc func tick() { showPhase(readHealth()) }
+    @objc func tick() { showStatus(readHealth()) }
 
     // MARK: Notifications
 
-    // macOS refuses system notifications to apps without a developer certificate (this one is
-    // signed ad hoc); then AppleScript notifications are used, which macOS shows as Script Editor.
+    // macOS refuses system notifications to apps without a developer certificate when the user
+    // hasn't allowed them; then AppleScript notifications are used (shown as Script Editor).
     func askNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
             DispatchQueue.main.async { self.systemNotificationsAllowed = granted }
@@ -459,9 +414,17 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     }
 
     @objc func checkForUpdates() {
-        manualUpdateCheck = true
-        Updater.shared.check()
-        refresh()
+        Updater.shared.check { [weak self] release in
+            guard let self = self else { return }
+            if let release = release {
+                self.post("Update \(release.version) available", "Install it from the extension's menu")
+            } else if case .failed(let text) = Updater.shared.state {
+                self.post("Couldn't check for updates", text)
+            } else {
+                self.post("\(appName) is up to date", "Version \(appVersion)")
+            }
+            self.refresh()
+        }
     }
 
     @objc func installUpdate() {
@@ -496,10 +459,14 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     @objc func switchToggled(_ sender: ColorSwitch) {
         let turnOn = sender.isOn
         enabled = turnOn
-        header.show(running: turnOn, busy: turnOn ? "Turning on…" : "Turning off…")
+        busy = turnOn ? "Turning on…" : "Turning off…"
+        refresh()
         DispatchQueue.main.async {
             if turnOn { self.startBridge() } else { self.stopBridge() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.refresh() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.busy = nil
+                self.refresh()
+            }
         }
     }
 
