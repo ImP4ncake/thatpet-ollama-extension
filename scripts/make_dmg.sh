@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the drag-and-drop installer build/ThatPet-Ollama-Extension.dmg from the built app:
-# a window with the app, an arrow and the Applications folder.
+# a window with the app, an arrow and the Applications folder, and a disk icon with the cat.
 #
 #   scripts/make_dmg.sh          (after scripts/build.sh; release.sh runs it too)
 #
@@ -20,6 +20,7 @@ mkdir -p "$STAGE/.background"
 ditto "$APP" "$STAGE/$NAME.app"
 ln -s /Applications "$STAGE/Applications"
 swift scripts/artwork.swift dmg-background "$WORK" >/dev/null
+swift scripts/artwork.swift disk-icon "$WORK" >/dev/null
 tiffutil -cathidpicheck "$WORK/background.png" "$WORK/background@2x.png" -out "$STAGE/.background/background.tiff" 2>/dev/null
 
 SIZE=$(( $(du -sm "$STAGE" | cut -f1) + 20 ))
@@ -61,7 +62,7 @@ fi
 
 [ -f "$MOUNT/.DS_Store" ] || { echo "Finder did not save the window layout"; exit 1; }
 # The disk's icon, set after Finder's pass (Finder drops one copied in before it).
-cp Resources/AppIcon.icns "$MOUNT/.VolumeIcon.icns"
+cp "$WORK/VolumeIcon.icns" "$MOUNT/.VolumeIcon.icns"
 SetFile -a C "$MOUNT"
 rm -rf "$MOUNT/.fseventsd"
 sync

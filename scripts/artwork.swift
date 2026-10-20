@@ -5,6 +5,7 @@
 //
 //   swift scripts/artwork.swift icon                  writes Resources/AppIcon.icns and docs/icon.png
 //   swift scripts/artwork.swift dmg-background DIR    writes the installer background (1x, @2x)
+//   swift scripts/artwork.swift disk-icon DIR         writes the installer disk's icon (VolumeIcon.icns)
 
 import AppKit
 
@@ -27,8 +28,10 @@ func smoothPath(_ points: [NSPoint]) -> NSBezierPath {
 /// The cat on a 455-wide grid, in the shape of ThatPet's (measured from its icon at 1024 px): a
 /// head with two rounded ears on a body that widens toward the edge. The edge's top is y = 0 and
 /// the ear tips reach y = 248. `eyes` colors the eyes (nil: plain silhouette); `edge` draws the
-/// edge it peeks over; `shaded` adds the soft light and shadow of an app icon.
-func drawCat(at origin: NSPoint, scale: CGFloat, ink: NSColor, eyes: NSColor?, edge: Bool, shaded: Bool = false) {
+/// edge it peeks over; `shaded` adds the soft light and shadow of an app icon; `outline` draws a
+/// border around it, so it shows on light backgrounds too.
+func drawCat(at origin: NSPoint, scale: CGFloat, ink: NSColor, eyes: NSColor?, edge: Bool, shaded: Bool = false,
+             outline: NSColor? = nil) {
     NSGraphicsContext.saveGraphicsState()
     let place = NSAffineTransform()
     place.translateX(by: origin.x, yBy: origin.y)
@@ -40,10 +43,10 @@ func drawCat(at origin: NSPoint, scale: CGFloat, ink: NSColor, eyes: NSColor?, e
         (32, 211), (37, 231), (45, 241), (56, 246), (66, 248), (78, 246), (89, 242), (101, 235), (116, 224),
         (131, 214), (146, 200), (160, 189), (176, 192), (191, 196), (206, 199), (227.5, 200),
     ]
-    var outline = half.map { NSPoint(x: $0.0, y: $0.1) }
-    outline += half.dropLast().reversed().map { NSPoint(x: 455 - $0.0, y: $0.1) }
-    outline += [NSPoint(x: 470, y: -20), NSPoint(x: -15, y: -20)]
-    var shapes = [smoothPath(outline)]
+    var points = half.map { NSPoint(x: $0.0, y: $0.1) }
+    points += half.dropLast().reversed().map { NSPoint(x: 455 - $0.0, y: $0.1) }
+    points += [NSPoint(x: 470, y: -20), NSPoint(x: -15, y: -20)]
+    var shapes = [smoothPath(points)]
     if edge {
         shapes.append(NSBezierPath(roundedRect: NSRect(x: -79, y: -39, width: 614, height: 39), xRadius: 19.5, yRadius: 19.5))
     }
@@ -60,6 +63,10 @@ func drawCat(at origin: NSPoint, scale: CGFloat, ink: NSColor, eyes: NSColor?, e
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.45)
         shadow.set()
         context.beginTransparencyLayer(auxiliaryInfo: nil)  // one shadow for the cat and its edge
+        if let outline = outline {
+            outline.setStroke()
+            for shape in shapes { shape.lineWidth = 14; shape.lineJoinStyle = .round; shape.stroke() }
+        }
         solid.setFill()
         shapes.forEach { $0.fill() }
         context.endTransparencyLayer()
@@ -84,8 +91,12 @@ func drawCat(at origin: NSPoint, scale: CGFloat, ink: NSColor, eyes: NSColor?, e
     NSGraphicsContext.restoreGraphicsState()
 }
 
-/// A rounded "+", where ThatPet's icon has its sparkle, with a soft glow like it.
-func drawPlus(center: NSPoint, arm: CGFloat, bar: CGFloat, color: NSColor) {
+/// A rounded "+", where ThatPet's icon has its sparkle, with a soft glow like it (or with a
+/// border, for light backgrounds).
+func drawPlus(center: NSPoint, arm: CGFloat, bar: CGFloat, color: NSColor, outline: NSColor? = nil) {
+    if let outline = outline {
+        drawPlus(center: center, arm: arm + 14, bar: bar + 14, color: outline)
+    }
     NSGraphicsContext.saveGraphicsState()
     let glow = NSShadow()
     glow.shadowBlurRadius = arm * 0.22
@@ -139,27 +150,81 @@ func drawIcon() {
     drawPlus(center: NSPoint(x: 752, y: 664), arm: 84, bar: 25, color: cream)
 }
 
-func writeIcon() throws {
-    let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("AppIcon.iconset")
+/// The installer disk's icon on a 1024 grid: a graphite drive with the cat peeking over its top
+/// edge (the drive is its edge) and the "+", so it reads as a disk that belongs to the app.
+func drawDiskIcon() {
+    let dark = NSColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
+    // The cat first: the drive in front hides its lower half. Dark borders keep the cat and the
+    // "+" visible on a light desktop or sidebar.
+    let border = NSColor(red: 0.2, green: 0.2, blue: 0.22, alpha: 1)
+    drawCat(at: NSPoint(x: 284, y: 508), scale: 1, ink: cream, eyes: dark, edge: false, shaded: true, outline: border)
+    drawPlus(center: NSPoint(x: 806, y: 728), arm: 84, bar: 25, color: cream, outline: border)
+    let body = NSRect(x: 132, y: 240, width: 760, height: 300)
+    let shape = NSBezierPath(roundedRect: body, xRadius: 70, yRadius: 70)
+    NSGraphicsContext.saveGraphicsState()
+    let shadow = NSShadow()
+    shadow.shadowBlurRadius = 26
+    shadow.shadowOffset = NSSize(width: 0, height: -12)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+    shadow.set()
+    NSColor.black.setFill()
+    shape.fill()
+    NSGraphicsContext.restoreGraphicsState()
+    NSGradient(colors: [NSColor(red: 0.27, green: 0.27, blue: 0.29, alpha: 1), dark])!.draw(in: shape, angle: -90)
+    // The top edge catches the light, like the edge the cat peeks over in the app icon.
+    NSGraphicsContext.saveGraphicsState()
+    shape.addClip()
+    NSGradient(colors: [NSColor.white.withAlphaComponent(0.22), NSColor.white.withAlphaComponent(0)])!
+        .draw(in: NSRect(x: body.minX, y: body.maxY - 46, width: body.width, height: 46), angle: -90)
+    // A seam near the bottom and a small status light: the front of a drive.
+    NSColor.black.withAlphaComponent(0.35).setFill()
+    NSRect(x: body.minX, y: body.minY + 82, width: body.width, height: 4).fill()
+    NSColor.white.withAlphaComponent(0.06).setFill()
+    NSRect(x: body.minX, y: body.minY + 86, width: body.width, height: 2).fill()
+    NSGraphicsContext.restoreGraphicsState()
+    NSColor.white.withAlphaComponent(0.1).setStroke()
+    let rim = NSBezierPath(roundedRect: body.insetBy(dx: 2.5, dy: 2.5), xRadius: 68, yRadius: 68)
+    rim.lineWidth = 5
+    rim.stroke()
+    NSGraphicsContext.saveGraphicsState()
+    let glow = NSShadow()
+    glow.shadowBlurRadius = 14
+    glow.shadowOffset = .zero
+    glow.shadowColor = cream.withAlphaComponent(0.8)
+    glow.set()
+    cream.setFill()
+    NSBezierPath(ovalIn: NSRect(x: body.maxX - 96, y: body.minY + 30, width: 22, height: 22)).fill()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+/// Writes `draw` (a 1024 grid) as an .icns with every standard size.
+func writeIcns(_ draw: @escaping () -> Void, to output: String) throws {
+    let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("artwork-\(getpid()).iconset")
     try? FileManager.default.removeItem(at: iconset)
     try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-    func icon(_ pixels: Int) -> Data {
-        bitmap(pixels: NSSize(width: pixels, height: pixels), points: NSSize(width: 1024, height: 1024), draw: drawIcon)
-            .representation(using: .png, properties: [:])!
-    }
+    defer { try? FileManager.default.removeItem(at: iconset) }
     for base in [16, 32, 128, 256, 512] {
-        try icon(base).write(to: iconset.appendingPathComponent("icon_\(base)x\(base).png"))
-        try icon(base * 2).write(to: iconset.appendingPathComponent("icon_\(base)x\(base)@2x.png"))
+        try png(draw, base).write(to: iconset.appendingPathComponent("icon_\(base)x\(base).png"))
+        try png(draw, base * 2).write(to: iconset.appendingPathComponent("icon_\(base)x\(base)@2x.png"))
     }
-    try icon(1024).write(to: URL(fileURLWithPath: "Resources/AppIcon-1024.png"))
-    try FileManager.default.createDirectory(atPath: "docs", withIntermediateDirectories: true)
-    try icon(256).write(to: URL(fileURLWithPath: "docs/icon.png"))  // for the README
     let iconutil = Process()
     iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-    iconutil.arguments = ["-c", "icns", iconset.path, "-o", "Resources/AppIcon.icns"]
+    iconutil.arguments = ["-c", "icns", iconset.path, "-o", output]
     try iconutil.run()
     iconutil.waitUntilExit()
-    print(iconutil.terminationStatus == 0 ? "Wrote Resources/AppIcon.icns" : "iconutil failed")
+    print(iconutil.terminationStatus == 0 ? "Wrote \(output)" : "iconutil failed")
+}
+
+func png(_ draw: () -> Void, _ pixels: Int) -> Data {
+    bitmap(pixels: NSSize(width: pixels, height: pixels), points: NSSize(width: 1024, height: 1024), draw: draw)
+        .representation(using: .png, properties: [:])!
+}
+
+func writeIcon() throws {
+    try png(drawIcon, 1024).write(to: URL(fileURLWithPath: "Resources/AppIcon-1024.png"))
+    try FileManager.default.createDirectory(atPath: "docs", withIntermediateDirectories: true)
+    try png(drawIcon, 256).write(to: URL(fileURLWithPath: "docs/icon.png"))  // for the README
+    try writeIcns(drawIcon, to: "Resources/AppIcon.icns")
 }
 
 /// The installer window (640 x 420 shown, drawn 460 tall). The app icon sits at (165, 185) and
@@ -224,5 +289,6 @@ let command = CommandLine.arguments.dropFirst().first
 switch command {
 case "icon": try writeIcon()
 case "dmg-background": try writeDMGBackground(to: URL(fileURLWithPath: CommandLine.arguments.dropFirst(2).first ?? "."))
-default: print("usage: swift scripts/artwork.swift icon | dmg-background DIR"); exit(1)
+case "disk-icon": try writeIcns(drawDiskIcon, to: (CommandLine.arguments.dropFirst(2).first ?? ".") + "/VolumeIcon.icns")
+default: print("usage: swift scripts/artwork.swift icon | dmg-background DIR | disk-icon DIR"); exit(1)
 }
