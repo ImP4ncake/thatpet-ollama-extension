@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>ThatPet Ollama Extension</string>
+	<key>CFBundleExecutable</key>
+	<string>ThatPetOllamaExtension</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.imp4ncake.thatpet-ollama-extension</string>
+	<key>CFBundleName</key>
+	<string>ThatPet Ollama Extension</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 ImP4ncake · MIT License · Not affiliated with ThatPet or Ollama</string>
+	<key>UpdatePublicKey</key>
+	<string>/clVkltXAVJ9mt9RoBFNeuEOun6bSGFtjy8/IgYxhU0=</string>
+	<key>UpdateRepository</key>
+	<string>ImP4ncake/thatpet-ollama-extension</string>
+</dict>
+</plist>

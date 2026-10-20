@@ -1,4 +1,5 @@
-# Built by ./build_menu_app.sh
-ThatPet Ollama Extension.app/
+build/
+*.app/
 __pycache__/
 .DS_Store
+Resources/AppIcon-1024.png
