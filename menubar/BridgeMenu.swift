@@ -44,6 +44,17 @@ func thatPet() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: thatPetID).first
 }
 
+let thatPetHelper = "/Applications/ThatPet.app/Contents/MacOS/ThatPet"
+
+/// ThatPet 0.4+ ignores agents that are not connected, and the bridge reports to it as the
+/// Hermes agent. False only when ThatPet says Hermes is not installed or disconnected.
+func thatPetLinked() -> Bool {
+    let out = run(thatPetHelper, ["agents"]).output
+    guard let line = out.split(separator: "\n").first(where: { $0.hasPrefix("Hermes Agent:") }) else { return true }
+    return !["notInstalled", "disconnected"].contains(line.dropFirst("Hermes Agent:".count)
+        .trimmingCharacters(in: .whitespaces))
+}
+
 /// Position macOS saved for ThatPet's icon (read-only; it exists after a Cmd+drag).
 func thatPetSavedPosition() -> Double? {
     let app = thatPetID as CFString
@@ -386,6 +397,8 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     let notifyItem = NSMenuItem(title: "Notify When a Reply Is Ready", action: #selector(toggleNotify),
                                 keyEquivalent: "")
     let styleMenu = NSMenu()
+    let reconnectItem = NSMenuItem(title: "Reconnect to ThatPet", action: #selector(reconnect), keyEquivalent: "")
+    var linked = true
     var liveTimer: Timer?
     var lastSeenEnd: Double = 0  // end time of the last reply already handled
     // macOS refuses system notifications to apps without a developer certificate (this one is
@@ -421,6 +434,10 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         warningItem.view = warningRow
         warningItem.isHidden = true
         menu.addItem(warningItem)
+        reconnectItem.target = self
+        reconnectItem.image = symbol("link", size: 13, weight: .regular)
+        reconnectItem.isHidden = true
+        menu.addItem(reconnectItem)
         menu.addItem(.separator())
         if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ollamaID) != nil {
             addItem("Open Ollama", "bubble.left.and.bubble.right", #selector(openOllama))
@@ -519,7 +536,9 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
         running = bridgeRunning()
         header.show(running: running)
         let health = readHealth()
-        let warning = running ? healthWarning(health) : nil
+        let warning = running && !linked ? ("ThatPet ignores the extension", "not linked")
+                                         : running ? healthWarning(health) : nil
+        reconnectItem.isHidden = linked
         warningRow.label.stringValue = warning?.title ?? ""
         warningRow.set(warning?.hint ?? "")
         warningItem.isHidden = warning == nil
@@ -529,7 +548,8 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
             item.state = item.representedObject as? String == IconStyle.current.rawValue ? .on : .off
         }
         let petOpen = thatPet() != nil
-        petRow.set(petOpen ? "Open" : "Not open", dot: petOpen ? .systemGreen : .tertiaryLabelColor)
+        petRow.set(!petOpen ? "Not open" : linked ? "Open" : "Open · not linked",
+                   dot: !petOpen ? .tertiaryLabelColor : linked ? .systemGreen : .systemOrange)
         reactionRow.set(lastReaction().map { "\($0.name) · \($0.time)" } ?? "None yet")
         guard let button = statusItem?.button else { return }
         button.image = extensionIcon()
@@ -557,6 +577,7 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        linked = thatPetLinked()
         refresh()
         // Tick every second while the menu is open (common modes: menus track events).
         let timer = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
@@ -607,6 +628,13 @@ final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelega
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+
+    /// Links the extension again with ThatPet's own command (an inert Hermes plugin).
+    @objc func reconnect() {
+        run(thatPetHelper, ["connect", "hermes"])
+        linked = thatPetLinked()
+        refresh()
     }
 
     @objc func toggleNotify() {

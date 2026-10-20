@@ -43,6 +43,10 @@ MENU_SOURCE = SOURCE.parent / "ThatPet Ollama Extension.app"
 MENU_APP = INSTALL_DIR / MENU_SOURCE.name
 # Earlier name of the icon app, removed on install.
 LEGACY_MENU_APP = INSTALL_DIR / "Bridge Ollama-ThatPet.app"
+# ThatPet 0.4+ ignores agents that are not connected, and the bridge reports to it as the
+# Hermes agent: install links it with ThatPet's own `connect hermes` (an inert plugin in
+# ~/.hermes/plugins/thatpet, since Hermes itself is not installed).
+THATPET = Path("/Applications/ThatPet.app/Contents/MacOS/ThatPet")
 # System Python first (Homebrew updates don't change it; the bridge is tested
 # with 3.9), then Homebrew's.
 PYTHONS = ["/usr/bin/python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
@@ -139,6 +143,28 @@ def install():
     print(f"  agent:  {PLIST}")
     print(f"  log:    {LOG}")
     install_menu()
+    link_thatpet()
+
+
+def thatpet_link_status():
+    try:
+        out = subprocess.run([str(THATPET), "agents"], capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    line = next((l for l in out.splitlines() if l.startswith("Hermes Agent:")), "")
+    return line.split(":", 1)[1].strip() if line else None
+
+
+def link_thatpet():
+    if not THATPET.exists():
+        print("  ThatPet: not found in /Applications")
+        return
+    subprocess.run([str(THATPET), "connect", "hermes"], capture_output=True, stdin=subprocess.DEVNULL,
+                   timeout=30)
+    status = thatpet_link_status()
+    linked = status not in (None, "notInstalled", "disconnected")
+    print(f"  ThatPet: {'linked' if linked else 'NOT linked'} (Hermes agent: {status})")
 
 
 def install_menu():
@@ -176,6 +202,11 @@ def uninstall():
     for state in ("bridge.lock", "health.json", "health.json.tmp"):  # written by the bridge
         if (INSTALL_DIR / state).exists():
             (INSTALL_DIR / state).unlink()
+    if THATPET.exists() and not shutil.which("hermes"):
+        # Hermes is not really installed: remove the link plugin made for the extension.
+        subprocess.run([str(THATPET), "disconnect", "hermes"], capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=30)
+        print("ThatPet: Hermes link removed.")
     if INSTALL_DIR.is_dir() and not any(INSTALL_DIR.iterdir()):
         INSTALL_DIR.rmdir()
     print("Autostart removed." if removed else "It was not installed.")
@@ -215,6 +246,9 @@ def status():
         print(f"Autostart: {info.get('state', '?')}"
               + (f", pid {info['pid']}" if "pid" in info else "")
               + f" (last exit: {info.get('last exit code', '?')})")
+    link = thatpet_link_status()
+    print(f"ThatPet link: Hermes agent {link}"
+          + (" (ThatPet ignores the extension: run install again)" if link in ("notInstalled", "disconnected") else ""))
     menu = re.search(r"^\s*pid = (\d+)", launchctl("print", MENU_SERVICE).stdout, re.M)
     print("Menu bar icon: " + (f"open (pid {menu.group(1)})" if menu else
           "not open" if MENU_PLIST.exists() else "not installed"))

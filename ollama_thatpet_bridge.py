@@ -232,6 +232,19 @@ class Pet:
             log(f"Hook sent: {event}" + ("" if self.pid else " (ThatPet does not seem to be open)"))
         return True
 
+    def link_status(self):
+        """ThatPet 0.4+ ignores agents that are not connected; the bridge reports as Hermes.
+        Returns ThatPet's status for it ("needsUpdate", "connected", "notInstalled", ...)."""
+        try:
+            out = subprocess.run([str(self.helper), "agents"], capture_output=True, text=True,
+                                 stdin=subprocess.DEVNULL, timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        for line in out.splitlines():
+            if line.startswith("Hermes Agent:"):
+                return line.split(":", 1)[1].strip()
+        return None
+
     def prompt(self):
         # One session per ThatPet process: if the app was reopened,
         # the new instance gets SessionStart again.
@@ -490,6 +503,12 @@ def main():
     log("SessionEnd is never sent.")
     log(f"ThatPet running (pid {pet.pid})" if pet.pid else
         "WARNING: ThatPet does not seem to be open. Open it before chatting.")
+    link = pet.link_status()
+    if link in ("notInstalled", "disconnected"):
+        log(f"WARNING: ThatPet lists the Hermes agent as {link}: ThatPet 0.4+ ignores the extension "
+            "until it is linked (Reconnect in the menu, or autostart.py install)")
+    elif link:
+        log(f"ThatPet link: Hermes agent {link} (events accepted)")
 
     try:
         while True:

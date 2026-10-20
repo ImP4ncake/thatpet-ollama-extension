@@ -90,6 +90,16 @@ VERSIONS
   then python3 autostart.py install.
 
 GOOD TO KNOW
+  - Since ThatPet 0.4 "a disconnected agent never moves her": ThatPet ignores
+    events from agents that are not connected in its menu. The extension
+    talks to ThatPet as the "Hermes Agent", so install links it with
+    ThatPet's own command (ThatPet connect hermes). That writes an inert
+    plugin to ~/.hermes/plugins/thatpet (Hermes itself is not installed);
+    ThatPet then lists Hermes as "needsUpdate" and accepts the events
+    (verified: ThatPet's turn count moves for Hermes, not for unlinked
+    agents). Uninstall removes it again. If a ThatPet update breaks the
+    link, the menu shows "ThatPet · Open · not linked" and a "Reconnect to
+    ThatPet" item.
   - ThatPet must never receive SessionEnd: it makes it quit (verified).
   - Only one bridge runs at a time: one started by hand while autostart is on
     refuses to start (the autostart one waits instead), so ThatPet never gets
