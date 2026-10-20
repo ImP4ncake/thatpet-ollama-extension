@@ -27,8 +27,11 @@ THE MENU BAR ICON (top right, next to ThatPet's cat)
   extension follows it within a few seconds.
 
   Click it to open the menu:
-    switch               turn the extension on or off (off = stays off after
-                         a restart until you turn it back on)
+    switch               green = on, red = off (off stays off after a restart
+                         until you turn it back on); orange while switching
+    now                  during a reply: the current phase (Thinking,
+                         Browsing the web, Writing the answer) and how long
+                         it has been going, e.g. "2:31 (6:02 total)"
     ThatPet              Open / Not open
     Last reaction        the last animation sent to the pet, with the time
     orange warning       only when something is wrong, e.g. "Reply end not
@@ -36,6 +39,15 @@ THE MENU BAR ICON (top right, next to ThatPet's cat)
     Open Ollama
     Show Log             the extension's log
     Open Project Folder  this folder
+    Notify When a Reply Is Ready
+                         a notification when a reply took 30 s or more and
+                         Ollama is not in front (on by default). macOS refuses
+                         system notifications to this app because it has no
+                         developer certificate, so it uses AppleScript ones,
+                         which macOS shows as "Script Editor": allow Script
+                         Editor in System Settings > Notifications if needed.
+                         Check: "ThatPet Ollama Extension.app/Contents/MacOS/
+                         BridgeMenu" --notification-check
     Icon Style           ThatPet | Ollama or ThatPet +
     Quit Extension (Cmd+Q)  stops the extension until the next login
 

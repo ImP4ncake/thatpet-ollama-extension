@@ -102,6 +102,15 @@ def parse_time(text):
     return (moment - offset - datetime(1970, 1, 1)).total_seconds()
 
 
+def tool_label(name):
+    """What the menu shows while a tool runs (ThatPet uses the same web tool names)."""
+    lower = (name or "").lower()
+    if lower.startswith("browser_") or lower in ("websearch", "webfetch", "web_search", "web_fetch",
+                                                  "web_extract", "search_web", "read_url_content"):
+        return "Browsing the web"
+    return f"Using {name or 'a tool'}"
+
+
 def is_fresh(created_at, since):
     """True for rows created during the current turn (rewritten rows keep old dates)."""
     ts = parse_time(created_at)
@@ -420,12 +429,22 @@ def main():
     previous_problem = None
     next_trim = time.monotonic() + 600
 
+    def set_phase(label):
+        """Current phase for the menu ("Thinking", "Browsing the web", ...), with its start time."""
+        if turn and turn.get("label") != label:
+            turn["label"] = label
+            health.update(phase=label, phase_since=time.time())
+
     def end_turn(outcome):
         nonlocal turn
         event, description = OUTCOMES[outcome]
-        log(f"Turn ended: {description} after {time.monotonic() - turn['started']:.1f} s")
+        seconds = time.monotonic() - turn["started"]
+        log(f"Turn ended: {description} after {seconds:.1f} s")
         pet.emit(event)
         turn = None
+        # The menu shows how the reply ended and notifies when a long one is ready.
+        health.update(phase=None, phase_since=None, turn_since=None,
+                      last_turn={"outcome": outcome, "seconds": round(seconds), "ended": time.time()})
         if outcome == "stalled" and applog.available:
             # app.log is there but its end line never came: Ollama may have changed
             health.update(stalled_turns=health.data.get("stalled_turns", 0) + 1)
@@ -445,6 +464,7 @@ def main():
                 log(f"Tool call: {turn['tool']}")
                 pet.emit("PreToolUse", tool=turn["tool"])
                 turn["phase"], turn["last_emit"] = ("PreToolUse", turn["tool"]), time.monotonic()
+                set_phase(tool_label(turn["tool"]))
         for r in rows:
             key = ("result", r[3])
             if (r[2] == "tool" and r[1] == turn["chat"] and is_fresh(r[3], turn["since"])
@@ -461,7 +481,9 @@ def main():
             pet.emit("UserPromptSubmit")
             turn["tool"] = turn["tool_result_at"] = None
             turn["phase"], turn["last_emit"] = ("UserPromptSubmit", None), time.monotonic()
+            set_phase("Writing the answer")
 
+    health.update(phase=None, phase_since=None, turn_since=None)
     log("Bridge v3 started. Press Ctrl+C to stop it.")
     log("Reply end detected from " + (f"{args.log}" if applog.available else
         f"a {args.idle:g} s timeout (app.log not found)"))
@@ -510,6 +532,8 @@ def main():
                             kind = "prompt" if row[2] == "user" else "'assistant' message (regeneration?)"
                             log(f"New {kind} in chat {row[1][:8]}")
                             pet.prompt()
+                            health.update(turn_since=time.time())
+                            set_phase("Thinking")
                     if turn:
                         latest = db.latest_reply(turn["chat"])
                         follow_tools(rows, calls, latest)
@@ -517,6 +541,8 @@ def main():
                         if size and size != turn["reply"]:
                             if not turn["reply"]:
                                 log(f"Model is generating (first text after {now - turn['started']:.1f} s)")
+                                if not turn["tool"]:
+                                    set_phase("Writing the answer")
                             turn["reply"], turn["reply_at"] = size, now
 
                 # 2) app.log: end of the stream (completed, stopped or failed).

@@ -8,6 +8,7 @@
 // Build with ./build_menu_app.sh; `BridgeMenu --preview file.png` draws an enlarged preview.
 
 import AppKit
+import UserNotifications
 
 let appName = "ThatPet Ollama Extension"
 let bridgeLabel = "local.ollama-thatpet-bridge"
@@ -53,11 +54,23 @@ func thatPetSavedPosition() -> Double? {
     return (CFPreferencesCopyAppValue(key as CFString, app) as? NSNumber)?.doubleValue
 }
 
-/// A problem the bridge reported in health.json, if any: (what, hint).
-func healthWarning() -> (title: String, hint: String)? {
+/// The bridge's health.json: problems, current phase of a reply, last reply.
+func readHealth() -> [String: Any]? {
     let file = home.appendingPathComponent("Library/Application Support/OllamaThatPetBridge/health.json")
-    guard let data = try? Data(contentsOf: file),
-          let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    guard let data = try? Data(contentsOf: file) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+}
+
+/// 75 -> "1:15"
+func clock(_ seconds: Double) -> String {
+    let s = max(0, Int(seconds))
+    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                     : String(format: "%d:%02d", s / 60, s % 60)
+}
+
+/// A problem the bridge reported in health.json, if any: (what, hint).
+func healthWarning(_ health: [String: Any]?) -> (title: String, hint: String)? {
+    guard let health = health else { return nil }
     if health["read_problem"] is String {
         return ("Can't read Ollama", "see the log")
     }
@@ -182,13 +195,89 @@ final class TileView: NSView {
     }
 }
 
+/// On/off switch: green when on, red when off, orange while it is switching.
+final class ColorSwitch: NSControl {
+    private(set) var isOn = false
+    private var knob: CGFloat = 0  // 0 = left (off), 1 = right (on)
+    private var animation: Timer?
+
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
+    override var intrinsicContentSize: NSSize { NSSize(width: 42, height: 24) }
+
+    func set(on: Bool, animated: Bool) {
+        guard on != isOn || animation == nil && knob != (on ? 1 : 0) else { return }
+        isOn = on
+        let target: CGFloat = on ? 1 : 0
+        animation?.invalidate()
+        guard animated else {
+            knob = target
+            needsDisplay = true
+            return
+        }
+        let start = knob, began = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self = self else { return timer.invalidate() }
+            let t = min(1, (CACurrentMediaTime() - began) / 0.18)
+            self.knob = start + (target - start) * CGFloat(t * (2 - t))  // ease out
+            self.needsDisplay = true
+            if t >= 1 {
+                timer.invalidate()
+                self.animation = nil
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)  // keeps running while the menu is open
+        animation = timer
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = NSRect(x: 1, y: (bounds.height - 22) / 2, width: bounds.width - 2, height: 22)
+        (!isEnabled ? NSColor.systemOrange : isOn ? NSColor.systemGreen : NSColor.systemRed).setFill()
+        NSBezierPath(roundedRect: track, xRadius: 11, yRadius: 11).fill()
+        let size: CGFloat = 18
+        let knobRect = NSRect(x: track.minX + 2 + (track.width - 4 - size) * knob, y: track.minY + 2,
+                              width: size, height: size)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 2
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
+        shadow.set()
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: knobRect).fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    // Menus deliver mouse-up to custom views reliably, so the switch flips on mouse-up.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        guard isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        flip()
+    }
+
+    private func flip() {
+        set(on: !isOn, animated: true)
+        sendAction(action, to: target)
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .checkBox }
+    override func accessibilityLabel() -> String? { "Extension on or off" }
+    override func accessibilityValue() -> Any? { isOn }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        flip()
+        return true
+    }
+}
+
 /// Top of the menu: icon on a tile, name, status with a colored dot, and an on/off switch.
 final class HeaderView: NSView {
     let tile = TileView()
     let icon = NSImageView(image: extensionIcon())
     let title = NSTextField(labelWithString: appName)
     let status = NSTextField(labelWithString: "")
-    let toggle = NSSwitch()
+    let toggle = ColorSwitch()
     lazy var iconWidth = icon.widthAnchor.constraint(equalToConstant: icon.image?.size.width ?? 24)
 
     init(target: AnyObject, action: Selector) {
@@ -218,6 +307,8 @@ final class HeaderView: NSView {
             status.topAnchor.constraint(equalTo: centerYAnchor, constant: 3),
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggle.widthAnchor.constraint(equalToConstant: 42),
+            toggle.heightAnchor.constraint(equalToConstant: 24),
             title.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
         ])
     }
@@ -227,12 +318,12 @@ final class HeaderView: NSView {
     func show(running: Bool, busy: String? = nil) {
         icon.image = extensionIcon()
         iconWidth.constant = icon.image?.size.width ?? 24
-        toggle.state = running ? .on : .off
+        toggle.set(on: running, animated: window != nil)
         toggle.isEnabled = busy == nil
         icon.alphaValue = running ? 1 : 0.4
         status.attributedStringValue = dotted(
             busy ?? (running ? "On · ThatPet reacts to Ollama" : "Off · ThatPet ignores Ollama"),
-            dot: busy != nil ? .systemOrange : running ? .systemGreen : .tertiaryLabelColor, size: 11)
+            dot: busy != nil ? .systemOrange : running ? .systemGreen : .systemRed, size: 11)
     }
 }
 
@@ -270,12 +361,16 @@ final class InfoRow: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    func setSymbol(_ name: String) {
+        symbolView.image = symbol(name, size: 12, weight: .medium)
+    }
+
     func set(_ text: String, dot: NSColor? = nil) {
         value.attributedStringValue = dotted(text, dot: dot, size: 13)
     }
 }
 
-final class Controller: NSObject, NSMenuDelegate {
+final class Controller: NSObject, NSMenuDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem?
     var placedAt: Double?  // ThatPet position used when the icon was created
     var petPID: pid_t?
@@ -286,7 +381,27 @@ final class Controller: NSObject, NSMenuDelegate {
     let reactionRow = InfoRow(symbol: "clock", label: "Last reaction")
     let warningRow = InfoRow(symbol: "exclamationmark.triangle.fill", label: "", tint: .systemOrange)
     let warningItem = NSMenuItem()
+    let nowRow = InfoRow(symbol: "ellipsis.bubble", label: "", tint: .controlAccentColor)
+    let nowItem = NSMenuItem()
+    let notifyItem = NSMenuItem(title: "Notify When a Reply Is Ready", action: #selector(toggleNotify),
+                                keyEquivalent: "")
     let styleMenu = NSMenu()
+    var liveTimer: Timer?
+    var lastSeenEnd: Double = 0  // end time of the last reply already handled
+    // macOS refuses system notifications to apps without a developer certificate (this one is
+    // signed ad hoc); then AppleScript notifications are used, which macOS shows as Script Editor.
+    var systemNotificationsAllowed = false
+
+    func askNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            DispatchQueue.main.async { self.systemNotificationsAllowed = granted }
+        }
+    }
+
+    var notifyEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "NotifyWhenReady") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "NotifyWhenReady") }
+    }
 
     override init() {
         super.init()
@@ -295,6 +410,9 @@ final class Controller: NSObject, NSMenuDelegate {
         headerItem.view = header
         menu.addItem(headerItem)
         menu.addItem(.separator())
+        nowItem.view = nowRow
+        nowItem.isHidden = true
+        menu.addItem(nowItem)
         for row in [petRow, reactionRow] {
             let item = NSMenuItem()
             item.view = row
@@ -309,6 +427,10 @@ final class Controller: NSObject, NSMenuDelegate {
         }
         addItem("Show Log", "doc.text", #selector(showLog))
         addItem("Open Project Folder", "folder", #selector(openProject))
+        menu.addItem(.separator())
+        notifyItem.target = self
+        notifyItem.image = symbol("bell", size: 13, weight: .regular)
+        menu.addItem(notifyItem)
         for style in IconStyle.allCases {
             let item = NSMenuItem(title: style.title, action: #selector(chooseStyle(_:)), keyEquivalent: "")
             item.target = self
@@ -322,6 +444,12 @@ final class Controller: NSObject, NSMenuDelegate {
         menu.addItem(styleItem)
         menu.addItem(.separator())
         addItem("Quit Extension", "power", #selector(quit), key: "q")
+        // Replies that ended before this launch must not trigger a notification.
+        lastSeenEnd = (readHealth()?["last_turn"] as? [String: Any])?["ended"] as? Double ?? 0
+        UNUserNotificationCenter.current().delegate = self
+        if notifyEnabled {
+            askNotificationPermission()
+        }
         createItemAfterThatPet(giveUpAt: Date().addingTimeInterval(90))
         Timer.scheduledTimer(timeInterval: 10, target: self, selector: #selector(refresh),
                              userInfo: nil, repeats: true)
@@ -375,6 +503,7 @@ final class Controller: NSObject, NSMenuDelegate {
 
     /// If you move ThatPet with Cmd+drag (or reopen it), the icon follows.
     @objc func followThatPet() {
+        notifyIfReplyFinished(readHealth())
         guard statusItem != nil, let pet = thatPet() else { return }
         let position = thatPetSavedPosition()
         if let position = position, position != placedAt {
@@ -389,10 +518,13 @@ final class Controller: NSObject, NSMenuDelegate {
     @objc func refresh() {
         running = bridgeRunning()
         header.show(running: running)
-        let warning = running ? healthWarning() : nil
+        let health = readHealth()
+        let warning = running ? healthWarning(health) : nil
         warningRow.label.stringValue = warning?.title ?? ""
         warningRow.set(warning?.hint ?? "")
         warningItem.isHidden = warning == nil
+        showPhase(health)
+        notifyItem.state = notifyEnabled ? .on : .off
         for item in styleMenu.items {
             item.state = item.representedObject as? String == IconStyle.current.rawValue ? .on : .off
         }
@@ -405,10 +537,88 @@ final class Controller: NSObject, NSMenuDelegate {
         button.toolTip = "\(appName): " + (running ? "on" : "off")
     }
 
-    func menuWillOpen(_ menu: NSMenu) { refresh() }
+    /// "Browsing the web · 2:31 (6:02 total)" while Ollama is replying; hidden otherwise.
+    func showPhase(_ health: [String: Any]?) {
+        guard running, let phase = health?["phase"] as? String,
+              let since = health?["phase_since"] as? Double else {
+            nowItem.isHidden = true
+            return
+        }
+        let now = Date().timeIntervalSince1970
+        var elapsed = clock(now - since)
+        if let start = health?["turn_since"] as? Double, since - start >= 2 {
+            elapsed += " (\(clock(now - start)) total)"
+        }
+        nowRow.label.stringValue = phase
+        nowRow.set(elapsed)
+        nowRow.setSymbol(["Thinking": "ellipsis.bubble", "Browsing the web": "globe",
+                          "Writing the answer": "text.cursor"][phase] ?? "wrench.and.screwdriver")
+        nowItem.isHidden = false
+    }
 
-    @objc func switchToggled(_ sender: NSSwitch) {
-        let turnOn = sender.state == .on
+    func menuWillOpen(_ menu: NSMenu) {
+        refresh()
+        // Tick every second while the menu is open (common modes: menus track events).
+        let timer = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        liveTimer = timer
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        liveTimer?.invalidate()
+        liveTimer = nil
+    }
+
+    @objc func tick() { showPhase(readHealth()) }
+
+    /// Notification when a long reply is ready and Ollama is not in front.
+    func notifyIfReplyFinished(_ health: [String: Any]?) {
+        guard let last = health?["last_turn"] as? [String: Any], let ended = last["ended"] as? Double,
+              ended > lastSeenEnd else { return }
+        lastSeenEnd = ended
+        let seconds = last["seconds"] as? Double ?? 0
+        let outcome = last["outcome"] as? String ?? ""
+        guard notifyEnabled, seconds >= 30, outcome == "completed" || outcome == "failed",
+              Date().timeIntervalSince1970 - ended < 60,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier != ollamaID else { return }
+        let title = outcome == "completed" ? "Ollama replied" : "Ollama stopped with an error"
+        let body = (outcome == "completed" ? "Ready after " : "After ") + clock(seconds)
+        guard systemNotificationsAllowed else {
+            // Text passed as arguments, never pasted into the script.
+            run("/usr/bin/osascript", ["-e", "on run argv",
+                                       "-e", "display notification (item 2 of argv) with title (item 1 of argv) sound name \"Glass\"",
+                                       "-e", "end run", title, body + " · open Ollama to read it"])
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body + " · click to open Ollama"
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { self.openOllama() }
+        completionHandler()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+
+    @objc func toggleNotify() {
+        notifyEnabled.toggle()
+        if notifyEnabled {
+            askNotificationPermission()
+        }
+        refresh()
+    }
+
+    @objc func switchToggled(_ sender: ColorSwitch) {
+        let turnOn = sender.isOn
         header.show(running: turnOn, busy: turnOn ? "Turning on…" : "Turning off…")
         DispatchQueue.global().async {
             let result = run("/usr/bin/python3", ["-I", autostart, turnOn ? "start" : "stop"])
@@ -494,6 +704,36 @@ func renderPreview(to path: String) {
     }
     NSGraphicsContext.restoreGraphicsState()
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+}
+
+// `BridgeMenu --notification-check`: print the notification permission and, if allowed,
+// send a test notification.
+if CommandLine.arguments.dropFirst().first == "--notification-check" {
+    let center = UNUserNotificationCenter.current()
+    let done = DispatchSemaphore(value: 0)
+    center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+        print("permission granted: \(granted)" + (error.map { " (error: \($0.localizedDescription))" } ?? ""))
+        done.signal()
+    }
+    if done.wait(timeout: .now() + 60) == .timedOut {
+        print("no answer yet: macOS is probably still showing the permission request")
+        exit(2)
+    }
+    center.getNotificationSettings { settings in
+        let names = [0: "not determined", 1: "denied", 2: "authorized", 3: "provisional", 4: "ephemeral"]
+        print("status: \(names[settings.authorizationStatus.rawValue] ?? "unknown"), alerts: \(settings.alertSetting.rawValue == 2 ? "on" : "off")")
+        done.signal()
+    }
+    done.wait()
+    let content = UNMutableNotificationContent()
+    content.title = appName
+    content.body = "Test notification: notifications work."
+    center.add(UNNotificationRequest(identifier: "test", content: content, trigger: nil)) { error in
+        print(error.map { "test notification failed: \($0.localizedDescription)" } ?? "test notification sent")
+        done.signal()
+    }
+    done.wait()
+    exit(0)
 }
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--preview" {
